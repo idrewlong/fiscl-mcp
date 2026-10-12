@@ -51,3 +51,8 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - **Holdings import profiles (Phase 4):** built-in profiles for Fidelity, Schwab and Vanguard position exports, plus crypto tax reports (start with the most common export formats; generic profile for the rest).
 - **HTTP transport (Phase 5):** read-only tools by default. Write tools over HTTP require `[http] allow_writes = true` in config. Why: HTTP is reachable by any local process holding the token, whereas stdio is bound to one client.
 - **tax.py → tax/ package** (Phase 3 slice 0), same pattern as analysis/, with a byte-identical snapshot test.
+
+## 2026-10-11 — QuickBooks: sandbox-only first, production behind a human check
+- **Decision:** Build the QBO read-only connector as the last Phase 4 slice, sandbox-only. Production stays disabled until a human completes Intuit's production questionnaire and confirms that OAuth Playground tokens work for a personal app. If not, QBO remains a sandbox test harness.
+- **Why:** Research shows it's free (Builder tier: 500k reads/month, blocked rather than billed over the cap), which meets the "free or cheap" rule. But production OAuth needs an https redirect, which a local-only tool can't provide without a workaround.
+- **Where:** `docs/research/2026-10-11-quickbooks-online-readonly.md`, `specs/2026-10-11-2224-v2-phase4-data.md`.
