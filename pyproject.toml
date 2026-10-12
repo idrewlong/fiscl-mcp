@@ -1,0 +1,46 @@
+[project]
+name = "fiscl"
+version = "0.1.0"
+description = "Local-first personal finance MCP server: import bank exports, ask questions about your money."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Richard Long", email = "idrewlong@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "watchdog>=6.0.0",
+]
+
+[project.optional-dependencies]
+sync = ["keyring>=25"]
+
+[project.scripts]
+fiscl = "fiscl.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["SIM105", "SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded HTML/JS and TOML templates
+"src/fiscl/charts.py" = ["E501"]
+"src/fiscl/config.py" = ["E501"]

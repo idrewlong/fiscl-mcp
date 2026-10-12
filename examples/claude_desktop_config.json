@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fiscl": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/fiscl", "run", "fiscl", "serve"]
+    }
+  }
+}

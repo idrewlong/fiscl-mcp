@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ParsedTxn:
+    posted_date: str  # YYYY-MM-DD
+    amount: int  # minor units, negative = money out
+    description: str
+    memo: str | None = None
+    fitid: str | None = None
+    pending: bool = False
+
+
+@dataclass
+class ParsedStatement:
+    format: str  # csv | ofx
+    txns: list[ParsedTxn]
+    account_key: str | None = None  # institution account identifier (OFX); hashed before storage
+    last4: str | None = None
+    type_hint: str | None = None
+    institution: str | None = None
+    currency: str = "USD"
+    balances: list[tuple[str, int]] = field(default_factory=list)
+    profile: str | None = None
+    account_name: str | None = None  # from a CSV profile's `account` field

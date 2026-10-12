@@ -1,0 +1,29 @@
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Local data (never commit real finance data)
+*.db
+*.db-wal
+*.db-shm
+.fiscl/
+
+# Secrets
+.env*
+!.env.example
+
+# Agent worktrees
+.worktrees/
+
+# Test/e2e artifacts
+e2e/.auth/
+playwright-report/
+test-results/
+
+.DS_Store
