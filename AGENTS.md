@@ -15,7 +15,8 @@ Local-first personal + business finance MCP server. It imports bank exports (CSV
 | Demo data | `uv run fiscl --home /tmp/fiscl-demo demo` |
 | Lint + format check | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
-| Unit tests | `uv run pytest -q` (~3s) |
+| Unit tests | `uv run pytest -q` (~6s; `-m 'not smoke'` skips the stdio smoke test) |
+| Smoke (every tool over stdio) | `uv run python scripts/smoke.py` |
 | Build | `uv build` |
 
 ## Layout
@@ -24,11 +25,13 @@ src/fiscl/
   server.py        MCP wiring: one thin wrapper per tool → run() guard (open DB, call service, redact, audit)
   analysis/        read services + categorization edits, one module per area:
     transactions.py  query_transactions, list_accounts, import_status, list_uncategorized
-    spending.py      spending_summary, cash_flow
-    budgets.py       budget_status, suggest_budgets
+    spending.py      spending_summary, cash_flow, merchant_history, category_trend
+    budgets.py       budget_status, suggest_budgets, set_budget
     forecast.py      forecast_cash (+ card payment projection)
     recurring_report.py  list_recurring (detection itself is fiscl/recurring.py)
-    edits.py         apply_categories
+    edits.py         apply_categories, add_note, tag_transactions, split_transaction, dismiss_recurring
+    planning.py      manage_asset, net_worth, afford, debt_payoff, manage_goal, goal_progress
+    monitoring.py    find_anomalies, subscription_watchdog, refund_tracker
   tax.py           Schedule C, estimated tax, write-off review, set_scope, log_trip, mileage_log
   common.py        shared service helpers: meta, money_arg, account_id, scope/txn filters, year_bounds,
                    resolve_target, dry-run plan_result, bulk limits
@@ -39,6 +42,7 @@ src/fiscl/
   importers/       core pipeline, csv_import (profiles), ofx, types
   sync/simplefin.py  read-only bank sync
   normalize.py · categorize.py · transfers.py · recurring.py · money.py · watch.py · demo.py · cli.py
+scripts/smoke.py   dev-only: demo data + every tool/resource/prompt over real stdio (`uv run python scripts/smoke.py`)
 tests/             pytest; conftest has `cfg`, `conn`, `demo` fixtures, `add_txn` helper, fixed TODAY
 docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 ```
@@ -47,7 +51,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - **Service signature:** `fn(conn, cfg, **args) -> dict`, pure functions over a sqlite3 connection. Accept `today=None` for anything date-relative so tests can pin it. Register the tool in `server.py` with a thin wrapper that calls `run("tool_name", service, **kwargs)`, and re-export from `analysis/__init__.py`.
 - **Money:** always integer minor units in the DB and in math. Respond with `amount(minor, currency)` → `{"minor", "display"}`. Parse user dollars with `common.money_arg`. Use `Decimal` for rates and banker's rounding. Never floats for money.
 - **Every response** includes `meta` from `common.meta(...)` (currency, data_freshness, period, row_count, total_count/truncated when capped, note). Return the totals you describe, so the model never adds.
-- **SQL:** parameterized only. Use `FROM {TXN_FROM}` for transaction queries so the `t`/`a`/`c` aliases that `SCOPE_SQL`, `SPENDING_FILTER`, and `INCOME_FILTER` need are present. Use `common.txn_filter(account_id, scope)` for optional account/scope restrictions.
+- **SQL:** parameterized only. Use `FROM {TXN_FROM}` (the split-aware `txn_lines` view) for aggregates and `TXN_BASE_FROM` for row listings, balances, and edits so the `t`/`a`/`c` aliases that `SCOPE_SQL`, `SPENDING_FILTER`, and `INCOME_FILTER` need are present. Use `common.txn_filter(account_id, scope)` for optional account/scope restrictions.
 - **Bad input:** raise `GuardError("message safe to show the model")`; `run()` turns it into an MCP tool error. Validate enums with `guard.choice`, dates with `guard.date_range`/`parse_month`, row caps with `guard.clamp_limit`.
 - **Local writes:** `dry_run=True` by default, return `common.plan_result(...)`, cap bulk edits with `check_items`/`check_bulk`, and annotate the tool `LOCAL_WRITE`. TOML edits go through `config.append_toml_block` (keeps `.bak` + provenance).
 - **Untrusted text:** bank descriptions go through `guard.clean_text` and are returned only as labeled data fields, never interpolated into prompts or instructions.

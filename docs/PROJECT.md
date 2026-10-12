@@ -2,7 +2,7 @@
 
 > A local-first finance server that speaks the Model Context Protocol (MCP), so any MCP client (Claude Desktop, Claude Code, Cursor, etc.) can answer questions about your money, for your household and your business, from your own data on your own machine.
 
-Status: **v1 working** (88 tests passing). Checked boxes in §15 are implemented.
+Status: **v1 working** (190 tests passing; v2 Phase 1 done). Checked boxes in §15 are implemented.
 
 ---
 
@@ -149,7 +149,7 @@ fiscl/
 │   ├── demo.py           # synthetic personal + business demo data
 │   ├── importers/        # core pipeline, csv_import (profiles), ofx, types
 │   └── sync/simplefin.py # read-only bank sync
-├── tests/                # 88 tests: importers, analysis, tax, MCP contract, stdio, guardrails, SimpleFIN
+├── tests/                # 190 tests: importers, analysis, tax, MCP contract, stdio, guardrails, SimpleFIN
 ├── examples/claude_desktop_config.json
 ├── PROJECT.md · README.md · SECURITY.md · LICENSE
 └── pyproject.toml
@@ -313,19 +313,33 @@ All tools return structured content, with money as `{ "minor": -4523, "display":
 | `set_scope` · `log_trip` | Business/personal and mileage (dry run default) | Local |
 | `sync_accounts` | Read-only SimpleFIN pull | Local (network to allowlisted host) |
 
-### 12.2 Tools (v2)
+### 12.2 Tools (v2 Phase 1, implemented)
 
-`net_worth` (with manual assets: house, vehicles, gear), `manage_goal`/`project_goal`, `find_anomalies` (new merchants, spikes, duplicate charges, fees), `merchant_history`, `category_trend`, `debt_payoff` (avalanche vs snowball), `afford` ("can I afford X?" against the forecast), `refund_tracker`, `holdings`, `export_report`, `split_transaction`, `add_note`/`tag_transaction`, `set_budget`, `dismiss_recurring`, `export_schedule_c`.
+| Tool | Purpose | Writes? |
+|------|---------|---------|
+| `add_note` · `tag_transactions` · `split_transaction` | Notes, tags (`query_transactions` filters by `tag`), splits that every aggregate respects | Local (dry run default) |
+| `dismiss_recurring` · `set_budget` | Hide a recurring item; edit `budgets.toml` | Local (dry run default) |
+| `manage_asset` · `manage_goal` | Manual assets/liabilities; savings goals | Local (dry run default) |
+| `net_worth` | Accounts + manual assets, change vs 30/90/365 days | No |
+| `afford` | "Can I afford X?" against the cash forecast | No |
+| `debt_payoff` | Avalanche vs snowball, to the cent | No |
+| `goal_progress` | Progress, required monthly, on-track by pace | No |
+| `find_anomalies` | Duplicates, spikes, new merchants, fees, category spikes (as questions) | No |
+| `subscription_watchdog` | Trials turned paid, duplicate services, price changes, annual renewals | No |
+| `refund_tracker` | Refunds received and refunds still expected (`refund-pending` tag) | No |
+| `merchant_history` · `category_trend` | Monthly history and trend direction | No |
+
+Still planned: `holdings`, `export_report`, `export_schedule_c`, bank connectors (see `specs/2026-10-11-1948-v2-roadmap.md`).
 
 ### 12.3 Resources
 
 v1: `fiscl://accounts`, `fiscl://categories`, `fiscl://rules`, `fiscl://budgets`, `fiscl://summary/current-month`, `ui://fiscl/chart.html`.
-v2: `fiscl://goals`, `fiscl://recurring`, `fiscl://tax/{year}`.
+v2 (done): `fiscl://goals`, `fiscl://recurring`. Planned: `fiscl://tax/{year}`.
 
 ### 12.4 Prompts
 
 v1: `monthly_review`, `subscription_audit`, `categorize_backlog`, `cash_forecast`, `tax_checkup`.
-v2: `spending_deep_dive`, `goal_check_in`, `year_in_review`, `weekly_digest`.
+v2 (done): `goal_check_in`. Planned: `spending_deep_dive`, `year_in_review`, `weekly_digest`.
 
 ---
 
@@ -412,17 +426,17 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [ ] Multi-currency with FX snapshots
 
 **Planning**
-- [ ] `net_worth` with manual assets
-- [ ] Goals
-- [ ] `debt_payoff`
-- [ ] `afford` what-if
+- [x] `net_worth` with manual assets
+- [x] Goals
+- [x] `debt_payoff`
+- [x] `afford` what-if
 - [ ] Zero-based/envelope budgets
-- [ ] `set_budget`
+- [x] `set_budget`
 
 **Monitoring**
-- [ ] `find_anomalies`
-- [ ] Subscription watchdog: trials converting to paid, duplicate services
-- [ ] Refund tracker
+- [x] `find_anomalies`
+- [x] Subscription watchdog: trials converting to paid, duplicate services
+- [x] Refund tracker
 - [ ] Weekly digest (Markdown file or Claude scheduled task)
 
 **Tax**
@@ -434,9 +448,9 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [ ] Receipts
 
 **Editing**
-- [ ] Splits
-- [ ] Notes and tags
-- [ ] Dismiss recurring
+- [x] Splits
+- [x] Notes and tags
+- [x] Dismiss recurring
 
 **MCP**
 - [ ] Streamable HTTP on localhost with a keychain bearer token
@@ -454,7 +468,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 
 ## 16. Testing
 
-- **88 pytest tests**, run with `uv run pytest`. They cover:
+- **190 pytest tests**, run with `uv run pytest`. They cover:
   - money parsing edge cases (parentheses, CR/DR, locales, banker's rounding)
   - redaction
   - merchant normalization (processor prefixes, store numbers, ACH codes, casing)
