@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import sqlite3
 import subprocess
@@ -95,7 +96,7 @@ def counts(db: Path) -> tuple:
 async def run(home: Path) -> Smoke:
     s = Smoke()
     params = StdioServerParameters(
-        command=sys.executable, args=["-m", "fiscl", "--home", str(home), "serve", "--no-watch"]
+        command=sys.executable, args=["-m", "fiscl", "--home", str(home), "serve", "--no-watch"], env=_child_env()
     )
     before = counts(home / "fiscl.db")
     async with Client(params) as c:
@@ -331,11 +332,21 @@ async def run(home: Path) -> Smoke:
     return s
 
 
+def _child_env() -> dict[str, str]:
+    """Environment for the fiscl subprocesses. The null keyring backend is not on fiscl's OS-keychain allowlist, so
+    the smoke run uses the 0600 file key in its temp home and never touches (or waits on) the real keychain."""
+    return {**os.environ, "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fiscl-smoke-") as tmp:
         home = Path(tmp) / "home"
         demo = subprocess.run(
-            [sys.executable, "-m", "fiscl", "--home", str(home), "demo"], capture_output=True, text=True, check=False
+            [sys.executable, "-m", "fiscl", "--home", str(home), "demo"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_child_env(),
         )
         if demo.returncode != 0:
             print("demo load failed:\n" + demo.stderr, file=sys.stderr)
