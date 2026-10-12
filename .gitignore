@@ -28,3 +28,6 @@ test-results/
 
 .DS_Store
 .claude/worktrees/
+
+# Browser-automation logs from local QA runs
+.playwright-mcp/

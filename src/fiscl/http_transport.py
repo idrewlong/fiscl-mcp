@@ -316,10 +316,11 @@ class GateMiddleware:
             await _reply(send, 405, headers=((b"allow", ", ".join(ALLOWED_METHODS).encode()),))
             return
 
-        if not auth_values:
-            # No credentials at all: not a guess at the token, so it neither feeds nor waits on the limiter (a page
-            # that can only fire header-less requests must not be able to lock the real client out) and costs no
-            # keychain read.
+        presented = _bearer(auth_values)
+        if presented is None:
+            # No single Bearer credential (missing, duplicated, or another scheme such as Basic from URL userinfo):
+            # not a guess at the token, so it neither feeds nor waits on the limiter (a page that can only fire such
+            # requests must not be able to lock the real client out) and costs no keychain read.
             await _reply(send, 401, headers=((b"www-authenticate", b"Bearer"),))
             return
         if self._limiter.locked():
@@ -335,8 +336,7 @@ class GateMiddleware:
             log.error("http token is missing from the keychain")
             await _reply(send, 503, b"token unavailable")
             return
-        presented = _bearer(auth_values)
-        if presented is None or not digests_match(presented, expected):
+        if not digests_match(presented, expected):
             self._limiter.record_failure()
             await _reply(send, 401, headers=((b"www-authenticate", b"Bearer"),))
             return

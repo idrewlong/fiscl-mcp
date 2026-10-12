@@ -1574,6 +1574,18 @@ def test_sec2_img_tag_style_gets_never_lock_out_the_right_token(cfg, token):
         assert s.post(auth=f"Bearer {token}")[0] == 200
 
 
+def test_sec2_non_bearer_authorization_never_locks_out_the_right_token(cfg, token):
+    # INFO-1: a Basic header (e.g. from URL userinfo in an old browser) or a duplicated header is not a guess at the
+    # bearer token, so it gets 401 without feeding the limiter.
+    with Live(cfg, limiter=ht.AuthLimiter(Clock())) as s:
+        for _ in range(30):
+            assert s.post(method="GET", body=b"", auth="Basic dXNlcjpwYXNz")[0] == 401
+        assert s.post(auth=f"Bearer {token}")[0] == 200
+        for _ in range(25):  # a wrong bearer token still counts toward the lockout
+            s.post(auth="Bearer not-the-token")
+        assert s.post(auth=f"Bearer {token}")[0] == 429
+
+
 def test_sec2_missing_authorization_does_not_read_the_keychain(cfg, token):
     reads = []
 

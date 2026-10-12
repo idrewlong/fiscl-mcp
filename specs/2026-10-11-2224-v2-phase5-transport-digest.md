@@ -1,5 +1,5 @@
 # fiscl v2 Phase 5: localhost HTTP transport, change notifications, weekly digest
-Status: draft
+Status: done (2026-10-12): HTTP transport, notifications, digest, prompts. Approved after QA, security (incl. re-verification) and 2 review rounds. Human check pending: a real Node-based client (Claude Code/Desktop) connecting over HTTP and receiving notifications (R4).
 Created: 2026-10-11 22:24 CDT   ·   Updated: 2026-10-11 22:24 CDT
 Author: Claude Code / my-skills:planner / planner subagent on feat/v2
 Owner: Richard Long
