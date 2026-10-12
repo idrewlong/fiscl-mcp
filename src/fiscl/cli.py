@@ -276,14 +276,18 @@ def cmd_connect(cfg, args) -> int:
                     say("Plaid environment is 'production': this needs your own approved Plaid app (Trial = 10 Items).")
                 _ensure_plaid_credentials()
                 with open_db(cfg) as conn:
-                    connect.connect_plaid(cfg, conn, announce=say)
+                    connect.connect_plaid(
+                        cfg, conn, announce=say, reconnect=args.reconnect, institution=args.institution
+                    )
                 print("Connected. Ask your assistant to sync_accounts, or run `fiscl sync run`.")
             elif args.target == "teller":
                 if cfg.teller_environment == "production":
                     say("Teller environment is 'production' (needs Teller business verification).")
                 _ensure_teller_credentials(cfg)
                 with open_db(cfg) as conn:
-                    connect.connect_teller(cfg, conn, announce=say)
+                    connect.connect_teller(
+                        cfg, conn, announce=say, reconnect=args.reconnect, institution=args.institution
+                    )
                 print("Connected. Ask your assistant to sync_accounts, or run `fiscl sync run`.")
             elif args.target == "simplefin":
                 say("Paste your SimpleFIN setup token (from https://beta-bridge.simplefin.org). Input is hidden.")
@@ -337,7 +341,7 @@ def cmd_doctor(cfg, args) -> int:
         if path.exists() and stat.S_IMODE(path.stat().st_mode) != DIR_MODE:
             os.chmod(path, DIR_MODE)
             fixed.append(f"permissions on {path}")
-    private_files = [cfg.db_path, cfg.config_file, cfg.rules_file, cfg.budgets_file]
+    private_files = [cfg.db_path, cfg.config_file, cfg.rules_file, cfg.budgets_file, cfg.home / ".install_key"]
     private_files += [p for d in (cfg.logs, cfg.backups, cfg.profiles_dir) if d.exists() for p in d.iterdir()]
     private_files += [cfg.db_path.with_name(cfg.db_path.name + s) for s in ("-wal", "-shm")]
     for path in private_files:
@@ -460,8 +464,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("connect", help="connect a bank for read-only sync (human-only; never an MCP tool)")
     a = s.add_subparsers(dest="target", required=True)
-    a.add_parser("teller", help="connect through Teller (recommended; needs your own Teller developer account)")
-    a.add_parser("plaid", help="connect through Plaid (needs your own Plaid developer account)")
+    for name, text in (
+        ("teller", "connect through Teller (recommended; needs your own Teller developer account)"),
+        ("plaid", "connect through Plaid (needs your own Plaid developer account)"),
+    ):
+        x = a.add_parser(name, help=text)
+        x.add_argument(
+            "--reconnect",
+            action="store_true",
+            help="re-authorize a connection that needs it, keeping the same account (no duplicates)",
+        )
+        x.add_argument("--institution", help="with --reconnect: which connection, if several need it")
     a.add_parser("simplefin", help="connect with a SimpleFIN setup token")
     a.add_parser("list", help="show connected banks (no secrets)")
     x = a.add_parser("forget", help="revoke access and delete the stored credentials")

@@ -181,6 +181,10 @@ _AUDIT_SAFE_KEYS = {
 # (mis)passed in one of these slots is logged as "<invalid>", never as written.
 _AUDIT_ENUMS: dict[str, frozenset[str]] = {
     "provider": frozenset({"all", "simplefin", "teller", "plaid"}),
+    "group_by": frozenset({"category", "merchant", "account", "month"}),
+    "compare_to": frozenset({"previous_period", "same_period_last_year", "none"}),
+    "interval": frozenset({"month", "week"}),
+    "sort": frozenset({"date_desc", "date_asc", "amount_asc", "amount_desc"}),
     "status": frozenset({"active", "price_changed", "missed", "cancelled"}),
     "kind": frozenset(
         {"subscription", "bill", "income"}  # list_recurring
@@ -191,10 +195,25 @@ _AUDIT_ENUMS: dict[str, frozenset[str]] = {
 }
 
 
+_AUDIT_DATE_KEYS = {"from_", "from", "to", "month"}
+_AUDIT_NUM_KEYS = {"limit", "days", "top_n", "months", "min_confidence"}
+_AUDIT_BOOL_KEYS = {"dry_run", "create_rule", "include_archived"}
+_AUDIT_DATE = re.compile(r"\d{4}-\d{2}(-\d{2})?")
+
+
 def _audit_value(key: str, value: Any) -> Any:
+    """Log a value verbatim only if it has the shape its key promises; anything else is "<invalid>"."""
     if key in _AUDIT_ENUMS:
-        return value if isinstance(value, str) and value in _AUDIT_ENUMS[key] else "<invalid>"
-    return value if key in _AUDIT_SAFE_KEYS else "<set>"
+        ok = isinstance(value, str) and value in _AUDIT_ENUMS[key]
+    elif key in _AUDIT_DATE_KEYS:
+        ok = isinstance(value, str) and _AUDIT_DATE.fullmatch(value) is not None
+    elif key in _AUDIT_NUM_KEYS:
+        ok = isinstance(value, int | float) and not isinstance(value, bool)
+    elif key in _AUDIT_BOOL_KEYS:
+        ok = isinstance(value, bool)
+    else:
+        return "<set>"
+    return value if ok else "<invalid>"
 
 
 def audit(

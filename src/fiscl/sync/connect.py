@@ -214,7 +214,8 @@ def teller_csp(nonce: str) -> str:
     )
 
 
-def teller_page(app_id: str, environment: str, nonce: str) -> str:
+def teller_page(app_id: str, environment: str, nonce: str, enrollment_id: str | None = None) -> str:
+    reauth = f"enrollmentId: {_js(enrollment_id)},\n      " if enrollment_id else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>fiscl: connect a bank</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"></head>
@@ -233,7 +234,7 @@ OS keychain on this machine.</p>
   try {{
     teller = TellerConnect.setup({{
       applicationId: {_js(app_id)},
-      environment: {_js(environment)},
+      {reauth}environment: {_js(environment)},
       products: {_js(teller.PRODUCTS)},
       onSuccess: function (e) {{
         var en = (e && e.enrollment) || {{}};
@@ -317,7 +318,40 @@ def save_teller_enrollment(conn: sqlite3.Connection, data: dict, revoke: Callabl
     token, eid, institution = parse_teller_enrollment(data)
     ref = connections.item_ref_hash("teller", eid)
     _store_then_record(conn, "teller", ref, token, institution, (lambda: revoke(token)) if revoke else None)
+    try:  # the raw enrollment id lets `--reconnect` re-authorize this same enrollment later; not a credential
+        base.secret_set(base.secret_name("teller", ref + ".eid"), eid)
+    except SyncError:
+        pass
     return institution
+
+
+def _pick_reauth(conn: sqlite3.Connection, provider: str, institution: str | None):
+    """The one connection that needs re-authorization (optionally narrowed by --institution)."""
+    rows = [r for r in connections.list_rows(conn, provider, institution) if r["status"] == "needs_reauth"]
+    label = provider.title()
+    if not rows:
+        raise SyncError(f"no {label} connection needs re-authorization; run `fiscl connect list` to check")
+    if len(rows) > 1:
+        raise SyncError(f"more than one {label} connection needs re-authorization; pass --institution NAME")
+    return rows[0]
+
+
+def save_teller_reconnect(
+    conn: sqlite3.Connection, row: sqlite3.Row, data: dict, revoke: Callable[[str], None] | None = None
+) -> str:
+    """Replace the stored token for the *same* enrollment. If Teller handed back a different enrollment (which
+    would create duplicate accounts), nothing is replaced and the stray grant is revoked."""
+    token, eid, _ = parse_teller_enrollment(data)
+    ref = row["item_ref_hash"]
+    if connections.item_ref_hash("teller", eid) != ref:
+        if revoke:
+            try:
+                revoke(token)
+            except Exception:
+                pass
+        raise SyncError("Teller returned a different enrollment than the one being re-authorized; nothing was changed")
+    _store_then_record(conn, "teller", ref, token, row["institution"] or "", None)
+    return row["institution"] or ""
 
 
 def connect_teller(
@@ -327,20 +361,38 @@ def connect_teller(
     timeout: float = TIMEOUT_SECONDS,
     announce: Callable[[str], None] = lambda msg: None,
     opener=None,
+    reconnect: bool = False,
+    institution: str | None = None,
 ) -> str:
     """Run the whole flow. Credentials (application id, and the certificate outside sandbox) must already be
-    in the keychain; the CLI collects them first."""
+    in the keychain; the CLI collects them first. With `reconnect`, re-authorize the one connection that needs it
+    through the same enrollment (TellerConnect `enrollmentId`) instead of creating a new one."""
     base.keyring_backend()  # no keychain, no connection
     env = cfg.teller_environment
     app_id = base.secret_get(base.secret_name("teller", "app_id")) or ""
     if not _APP_ID.fullmatch(app_id):
         raise SyncError("no Teller application id is stored; run `fiscl connect teller` again")
+
+    def revoke(tok: str) -> None:
+        teller.TellerConnector(cfg, [], opener=opener).revoke_token(tok)
+
+    enrollment_id = None
+    if reconnect:
+        row = _pick_reauth(conn, "teller", institution)
+        enrollment_id = base.secret_get(base.secret_name("teller", row["item_ref_hash"] + ".eid"))
+        if not (enrollment_id and _ENROLLMENT.fullmatch(enrollment_id)):
+            raise SyncError(
+                "fiscl doesn't know this connection's Teller enrollment id yet (it is learned on a successful sync "
+                "or when connecting). Forget it with `fiscl connect forget teller --institution NAME` and connect "
+                "again; your imported data is kept."
+            )
+        save = lambda data: save_teller_reconnect(conn, row, data, revoke)  # noqa: E731
+    else:
+        save = lambda data: save_teller_enrollment(conn, data, revoke)  # noqa: E731
     server = make_server(
         secrets.token_urlsafe(32),
-        lambda nonce: (teller_page(app_id, env, nonce), teller_csp(nonce)),
-        lambda data: save_teller_enrollment(
-            conn, data, lambda tok: teller.TellerConnector(cfg, [], opener=opener).revoke_token(tok)
-        ),
+        lambda nonce: (teller_page(app_id, env, nonce, enrollment_id), teller_csp(nonce)),
+        save,
     )
     run_flow(server, f"Teller {env}", open_browser, timeout, announce)
     return "teller"
@@ -434,6 +486,23 @@ def save_plaid_item(conn: sqlite3.Connection, client: plaid.PlaidClient, data: d
     return institution
 
 
+def save_plaid_reconnect(conn: sqlite3.Connection, client: plaid.PlaidClient, row: sqlite3.Row, data: dict) -> str:
+    """Link update mode finished. The Item and its access token are unchanged (Plaid just refreshed the login), so
+    there is nothing to exchange or store: confirm the Item answers again, then mark the connection ok."""
+    parse_plaid_result(data)  # same shape check as a new link; the public token itself is not used
+    ref = row["item_ref_hash"]
+    token = base.secret_get(base.secret_name("plaid", ref))
+    if not token:
+        raise SyncError("this connection has no stored access token; forget it and connect again")
+    try:
+        client.call("/accounts/get", {"access_token": token})
+    except SyncError as exc:
+        raise SyncError("Plaid still reports this connection needs re-authorization; try `--reconnect` again") from exc
+    connections.set_status(conn, "plaid", ref, "ok")
+    conn.commit()
+    return row["institution"] or ""
+
+
 def connect_plaid(
     cfg: Config,
     conn: sqlite3.Connection,
@@ -441,17 +510,29 @@ def connect_plaid(
     timeout: float = TIMEOUT_SECONDS,
     announce: Callable[[str], None] = lambda msg: None,
     opener=None,
+    reconnect: bool = False,
+    institution: str | None = None,
 ) -> str:
     """Run the whole flow. The Plaid keys must already be in the keychain; the CLI collects them first.
-    The link token is created here (server side) and is the only thing the page receives."""
+    The link token is created here (server side) and is the only thing the page receives. With `reconnect`, Link
+    runs in update mode for the one connection that needs re-authorization, so no new Item is created."""
     base.keyring_backend()  # no keychain, no connection
     client_id, secret = plaid.load_app_credentials()
     client = plaid.PlaidClient(cfg.plaid_environment, client_id, secret, opener)
-    link_token = plaid.create_link_token(client)
+    if reconnect:
+        row = _pick_reauth(conn, "plaid", institution)
+        access = base.secret_get(base.secret_name("plaid", row["item_ref_hash"]))
+        if not access:
+            raise SyncError("this connection has no stored access token; forget it and connect again")
+        link_token = plaid.create_link_token(client, access_token=access)
+        save = lambda data: save_plaid_reconnect(conn, client, row, data)  # noqa: E731
+    else:
+        link_token = plaid.create_link_token(client)
+        save = lambda data: save_plaid_item(conn, client, data)  # noqa: E731
     server = make_server(
         secrets.token_urlsafe(32),
         lambda nonce: (plaid_page(link_token, nonce), plaid_csp(nonce)),
-        lambda data: save_plaid_item(conn, client, data),
+        save,
     )
     run_flow(server, f"Plaid {cfg.plaid_environment}", open_browser, timeout, announce)
     return "plaid"

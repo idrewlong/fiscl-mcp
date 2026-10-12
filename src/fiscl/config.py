@@ -348,16 +348,19 @@ def backup_file(path: Path) -> None:
 
 def append_toml_block(path: Path, block: str, tool: str) -> None:
     """Append to a user-edited TOML file, keeping a .bak and a provenance comment."""
-    backup_file(path)
     stamp = datetime.now().isoformat(timespec="seconds")
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     sep = "" if existing.endswith("\n") or not existing else "\n"
-    _write_private(path, f"{existing}{sep}\n# added by {tool} at {stamp}\n{block.rstrip()}\n")
-    tomllib.loads(path.read_text(encoding="utf-8"))  # fail loudly if we produced invalid TOML
+    new = f"{existing}{sep}\n# added by {tool} at {stamp}\n{block.rstrip()}\n"
+    tomllib.loads(new)  # validate before anything touches disk: a bad block must never leave a broken file
+    backup_file(path)
+    _write_private(path, new)
 
 
-def _toml_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)  # JSON strings with \uXXXX escapes are valid TOML basic strings
+def toml_string(value: str) -> str:
+    # ensure_ascii=False keeps non-BMP text literal (JSON would emit surrogate-pair escapes, which TOML rejects).
+    # DEL is the one control character JSON leaves raw that TOML forbids.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 _BUDGET_HEADER = re.compile(r"^\s*\[\[\s*budget\s*\]\]\s*(#.*)?$")
@@ -397,7 +400,7 @@ def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") 
     out += f"# updated by {tool} at {datetime.now().isoformat(timespec='seconds')}\n"
     for b in sorted(budgets, key=lambda b: b.category.lower()):
         monthly = str(b.monthly) if scale == 1 else f"{Decimal(b.monthly) / scale:.2f}"
-        out += f"\n[[budget]]\ncategory = {_toml_string(b.category)}\nmonthly = {monthly}\n"
+        out += f"\n[[budget]]\ncategory = {toml_string(b.category)}\nmonthly = {monthly}\n"
         if b.rollover:
             out += "rollover = true\n"
     backup_file(path)

@@ -192,7 +192,7 @@ def import_status(conn, cfg: Config, limit=10) -> dict:
                 "rows_seen": r["rows_seen"],
                 "rows_added": r["rows_added"],
                 "rows_skipped": r["rows_skipped"],
-                "error": r["error"],
+                "error": clean_text(r["error"], 200) or None,
                 "imported_at": r["imported_at"],
             }
             for r in rows

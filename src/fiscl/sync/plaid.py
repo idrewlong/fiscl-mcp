@@ -21,8 +21,8 @@ from decimal import Decimal, InvalidOperation
 
 from ..config import Config
 from ..guard import clean_text
-from ..importers.core import account_hash
 from ..importers.types import ParsedStatement, ParsedTxn
+from ..installkey import account_hash, legacy_account_hash
 from ..money import AmountError, parse_amount
 from . import base
 from .base import Policy, SyncError
@@ -201,8 +201,19 @@ def link_token_body() -> dict:
     }
 
 
-def create_link_token(client: PlaidClient) -> str:
-    token = client.call("/link/token/create", link_token_body()).get("link_token")
+def update_link_token_body(access_token: str) -> dict:
+    """Link *update mode* (re-authenticate an existing Item): the Item's access_token and no `products`. Plaid
+    refreshes the same Item, so no new Item, accounts, or transactions appear."""
+    body = link_token_body()
+    del body["products"]
+    body["access_token"] = access_token
+    return body
+
+
+def create_link_token(client: PlaidClient, access_token: str | None = None) -> str:
+    """A Link token for a new connection, or (with `access_token`) for update mode on an existing Item."""
+    body = update_link_token_body(access_token) if access_token else link_token_body()
+    token = client.call("/link/token/create", body).get("link_token")
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9\-_]{10,300}", token):
         raise SyncError("Plaid didn't return a link token")
     return token
@@ -295,7 +306,10 @@ class PlaidConnector:
     def _fail_item(self, item: PlaidItem, status: int | None, code: str | None) -> None:
         if code in _REAUTH_CODES or code == "ITEM_NOT_FOUND":
             self.item_status[item.ref] = "needs_reauth"
-            self.warnings.append("a Plaid connection needs to be re-authorized: run `fiscl connect plaid` again")
+            self.warnings.append(
+                "a Plaid connection needs to be re-authorized: run `fiscl connect plaid --reconnect` "
+                "(add --institution NAME if you have several)"
+            )
         else:
             self.item_status[item.ref] = "error"
             self.warnings.append("Plaid couldn't be reached for one connection; try again later")
@@ -313,7 +327,11 @@ class PlaidConnector:
         elif not cursor and not (added or modified):
             self.warnings.append("Plaid is still preparing this connection's transactions; sync again in a few minutes")
         # A removal may only touch accounts that belong to this Item, whatever ids Plaid sends back.
-        mine = [account_hash(f"{PROVIDER}:{aid}") for aid in accounts]
+        mine = [
+            h
+            for aid in accounts
+            for h in (account_hash(self.cfg, f"{PROVIDER}:{aid}"), legacy_account_hash(f"{PROVIDER}:{aid}"))
+        ]
         self._removed += [
             (str(r["transaction_id"]), mine) for r in removed if _TXN_ID.fullmatch(str(r.get("transaction_id")))
         ]

@@ -10,6 +10,8 @@ from pathlib import Path
 
 from ..config import Config, load_rules_raw
 from ..db import add_account, find_account
+from ..guard import clean_text
+from ..installkey import account_hash, legacy_account_hash
 from ..normalize import load_aliases, normalize_merchant
 from .csv_import import CSVImportError, parse_csv
 from .ofx import OFXError, looks_like_ofx, parse_ofx
@@ -51,10 +53,6 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def account_hash(key: str) -> str:
-    return hashlib.sha256(key.encode()).hexdigest()
-
-
 def _dedupe_key(posted: str, amount: int, merchant: str, occurrence: int) -> str:
     raw = f"{posted}|{amount}|{merchant.lower()}|{occurrence}"
     return "h:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
@@ -82,13 +80,22 @@ def _free_name(conn: sqlite3.Connection, name: str) -> str:
     return candidate
 
 
-def _resolve_account(conn: sqlite3.Connection, stmt: ParsedStatement, account_name: str | None) -> sqlite3.Row:
+def _resolve_account(
+    conn: sqlite3.Connection, cfg: Config, stmt: ParsedStatement, account_name: str | None
+) -> sqlite3.Row:
     name = account_name or stmt.account_name
     if stmt.account_key:
-        acct_hash = account_hash(stmt.account_key)
+        acct_hash = account_hash(cfg, stmt.account_key)
         row = conn.execute("SELECT * FROM accounts WHERE acct_hash = ?", (acct_hash,)).fetchone()
         if row:
             return row
+        # Accounts from before the keyed hash carry sha256(key): find them and upgrade in place, once.
+        legacy = conn.execute(
+            "SELECT * FROM accounts WHERE acct_hash = ?", (legacy_account_hash(stmt.account_key),)
+        ).fetchone()
+        if legacy:
+            conn.execute("UPDATE accounts SET acct_hash = ? WHERE id = ?", (acct_hash, legacy["id"]))
+            return conn.execute("SELECT * FROM accounts WHERE id = ?", (legacy["id"],)).fetchone()
         new_name = name or f"{stmt.institution or 'Account'} ••{stmt.last4}"
         if name and (row := find_account(conn, name)):
             if row["acct_hash"] is None:
@@ -97,6 +104,9 @@ def _resolve_account(conn: sqlite3.Connection, stmt: ParsedStatement, account_na
                     (acct_hash, stmt.last4, row["id"]),
                 )
                 return find_account(conn, name)
+            if account_name is not None:
+                # The user named this account on purpose (--account): that is their call, so keep merging.
+                return row
             # The name belongs to an account already bound to a different identity. A display name is bank-supplied
             # text, never proof of identity, so don't merge: make a separate, clearly labelled account.
             new_name = _free_name(conn, f"{name} ({stmt.format})")
@@ -178,6 +188,10 @@ def _insert_statement(
         merchant = normalize_merchant(t.description, aliases)
         if t.fitid and not t.pending:
             key = "f:" + t.fitid
+        elif t.fitid and stmt.format == "plaid":
+            # Cursor connectors give every pending row a stable provider id; two identical pending charges that
+            # arrive in different syncs are different charges, so key on the id, not the description.
+            key = "p:f:" + t.fitid
         else:
             # Keyed on the raw description (not the normalized merchant) so editing aliases later
             # can't make an overlapping export look like new transactions.
@@ -290,7 +304,7 @@ def import_statements(
         import_id = int(cur.lastrowid)
         account_id = None
         for stmt in statements:
-            account = _resolve_account(conn, stmt, account_name)
+            account = _resolve_account(conn, cfg, stmt, account_name)
             account_id = account["id"]
             result.accounts.append(account["name"])
             added, skipped, replaced, carried, dropped = _insert_statement(conn, stmt, account, import_id, aliases)
@@ -323,6 +337,7 @@ def import_statements(
 def _record_failure(
     conn, label: str, fmt: str | None, digest: str, result: ImportResult, error: str, dry_run: bool
 ) -> ImportResult:
+    error = clean_text(error, 200)
     result.status, result.error = "failed", error
     if not dry_run:
         conn.execute(

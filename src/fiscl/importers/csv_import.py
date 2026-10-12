@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from ..config import FILE_MODE, Config
+from ..config import FILE_MODE, Config, toml_string
 from ..guard import clean_text
 from ..money import AmountError, parse_amount
 from .types import ParsedStatement, ParsedTxn
@@ -94,8 +95,12 @@ def load_profiles(cfg: Config) -> list[Profile]:
     profiles: list[Profile] = []
     if cfg.profiles_dir.exists():
         for path in sorted(cfg.profiles_dir.glob("*.toml")):
-            with path.open("rb") as fh:
-                profiles.append(Profile.from_dict(tomllib.load(fh), path.name))
+            try:
+                with path.open("rb") as fh:
+                    data = tomllib.load(fh)
+            except tomllib.TOMLDecodeError as exc:
+                raise CSVImportError(f"profile {path.name} is not valid TOML") from exc
+            profiles.append(Profile.from_dict(data, path.name))
     return profiles + BUILTIN_PROFILES
 
 
@@ -137,7 +142,7 @@ def _parse_date(value: str, fmt: str | None) -> str:
             return datetime.strptime(value, f).date().isoformat()
         except ValueError:
             continue
-    raise CSVImportError(f"unrecognized date {value!r}")
+    raise CSVImportError("unrecognized date")
 
 
 def _get(row: dict[str, str], column: str | None) -> str:
@@ -177,7 +182,7 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
             if profile.amount_sign == "invert":
                 amt = -amt
         except (AmountError, CSVImportError) as exc:
-            raise CSVImportError(f"line {n}: {exc}") from exc
+            raise CSVImportError(f"{exc} on line {n}") from exc
         pending = _get(row, profile.status_column).lower() == "pending"
         txns.append(
             ParsedTxn(
@@ -232,26 +237,27 @@ def init_profile(path: Path, cfg: Config, name: str | None = None) -> Path:
     name = name or path.stem.lower().replace(" ", "-")
     sample_date = rows[0].get(date_col, "") if rows else ""
     fmt = next((f for f in DATE_FORMATS if _try(sample_date, f)), None)
+    q = toml_string
     lines = [
-        f'name = "{name}"',
-        f"match_headers = [{', '.join(repr(h).replace(chr(39), chr(34)) for h in header)}]",
-        f'date_column = "{date_col}"',
-        f'description_column = "{desc_col}"',
+        f"name = {q(name)}",
+        f"match_headers = [{', '.join(q(h) for h in header)}]",
+        f"date_column = {q(date_col)}",
+        f"description_column = {q(desc_col)}",
     ]
     if amount_col:
-        lines.append(f'amount_column = "{amount_col}"')
+        lines.append(f"amount_column = {q(amount_col)}")
     else:
-        lines += [f'debit_column = "{debit_col}"', f'credit_column = "{credit_col}"']
+        lines += [f"debit_column = {q(debit_col)}", f"credit_column = {q(credit_col)}"]
     if balance_col:
-        lines.append(f'balance_column = "{balance_col}"')
+        lines.append(f"balance_column = {q(balance_col)}")
     if fmt:
-        lines.append(f'date_format = "{fmt}"')
+        lines.append(f"date_format = {q(fmt)}")
     lines += [
         'amount_sign = "as_is"   # set to "invert" if purchases show as positive numbers',
         '# account = "Chase Checking"   # optional: import straight into this account',
     ]
     cfg.profiles_dir.mkdir(parents=True, exist_ok=True)
-    out = cfg.profiles_dir / f"{name}.toml"
+    out = cfg.profiles_dir / f"{re.sub(r'[^A-Za-z0-9._-]+', '-', name).strip('.-') or 'profile'}.toml"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     out.chmod(FILE_MODE)
     return out

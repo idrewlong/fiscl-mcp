@@ -40,8 +40,13 @@ src/fiscl/
   config.py        data dir layout, config/rules/budgets TOML, tax settings
   charts.py        chart specs + MCP Apps HTML view (no external requests)
   importers/       core pipeline, csv_import (profiles), ofx, types
-  sync/            read-only bank connectors: base.py (allowlisted no-redirect request helper, keychain, mTLS, Connector protocol),
-                   simplefin.py, teller.py, connect.py (human-only localhost connect flow), connections.py, registry.py
+  sync/            read-only bank connectors (only package that may use the network):
+    base.py          allowlisted no-redirect request helper, keychain helpers, mTLS, Connector protocol
+    teller.py · plaid.py · simplefin.py   one connector per provider (fixed route allowlists)
+    connect.py       human-only localhost connect flow (`fiscl connect teller|plaid [--reconnect]`)
+    connections.py   the `connections` table (provider, institution, hashed ref, status, Plaid cursor; never a token)
+    registry.py      build connectors, sync_accounts, list_connections, forget
+  installkey.py    per-install random key for the keyed account hash (OS keychain, else 0600 `.install_key`)
   normalize.py · categorize.py · transfers.py · recurring.py · money.py · watch.py · demo.py · cli.py
 scripts/smoke.py   dev-only: demo data + every tool/resource/prompt over real stdio (`uv run python scripts/smoke.py`)
 tests/             pytest; conftest has `cfg`, `conn`, `demo` fixtures, `add_txn` helper, fixed TODAY
@@ -53,7 +58,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - **Money:** always integer minor units in the DB and in math. Respond with `amount(minor, currency)` → `{"minor", "display"}`. Parse user dollars with `common.money_arg`. Use `Decimal` for rates and banker's rounding. Never floats for money.
 - **Every response** includes `meta` from `common.meta(...)` (currency, data_freshness, period, row_count, total_count/truncated when capped, note). Return the totals you describe, so the model never adds.
 - **SQL:** parameterized only. Use `FROM {TXN_FROM}` (the split-aware `txn_lines` view) for aggregates and `TXN_BASE_FROM` for row listings, balances, and edits so the `t`/`a`/`c` aliases that `SCOPE_SQL`, `SPENDING_FILTER`, and `INCOME_FILTER` need are present. Use `common.txn_filter(account_id, scope)` for optional account/scope restrictions.
-- **Bad input:** raise `GuardError("message safe to show the model", code="not_found|sum_mismatch|needs_terms|exists|invalid")`; `run()` returns the redacted message to the model and logs only the code. Never put merchant names, amounts, or asset/goal/account names in error text; put names in structured response fields with fixed prose. Validate enums with `guard.choice`, dates with `guard.date_range`/`parse_month`, row caps with `guard.clamp_limit`.
+- **Bad input:** raise `GuardError("message safe to show the model", code="not_found|sum_mismatch|needs_terms|exists|invalid|sync_failed")`; `run()` returns the redacted message to the model and logs only the code. Never put merchant names, amounts, or asset/goal/account names in error text; put names in structured response fields with fixed prose. Validate enums with `guard.choice`, dates with `guard.date_range`/`parse_month`, row caps with `guard.clamp_limit`.
 - **Local writes:** `dry_run=True` by default, return `common.plan_result(...)`, cap bulk edits with `check_items`/`check_bulk`, and annotate the tool `LOCAL_WRITE`. TOML edits go through `config.append_toml_block` (keeps `.bak` + provenance).
 - **Untrusted text:** bank descriptions go through `guard.clean_text` and are returned only as labeled data fields, never interpolated into prompts or instructions.
 - **Tax output** carries `DISCLAIMER` and frames findings as questions for the user and their preparer.
@@ -78,7 +83,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - Render bank-derived text as HTML in the chart view (`innerHTML`); use `textContent`. Keep its CSP strict.
 - Create files without private permissions, or use `$HOME` itself as the data dir.
 - Print to stdout from server code paths: stdout carries the MCP protocol. Log to files.
-- Store full account numbers, secrets in files, or credentials in URLs.
+- Store full account numbers, secrets in files (the one exception is the random HMAC key `.install_key`, 0600, used only when no OS keychain exists), or credentials in URLs.
 - Use floats for money, or f-string user values into SQL.
 - Commit real bank exports or `.db` files. Test fixtures must be synthetic.
 - Commit secrets or real `.env` files; push to `main` directly; publish to PyPI without the human.

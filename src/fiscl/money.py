@@ -21,7 +21,7 @@ MAX_MAJOR = Decimal(10**12)  # $1 trillion: anything larger is a typo or an atta
 
 def _check_range(d: Decimal, original: object) -> Decimal:
     if not d.is_finite():
-        raise AmountError(f"not a finite number: {original!r}")
+        raise AmountError("not a finite number")
     if abs(d) > MAX_MAJOR:
         raise AmountError("amount is too large")
     return d
@@ -65,11 +65,11 @@ def parse_amount(text: str, currency: str = "USD") -> int:
     elif "," in s:
         s = s.replace(",", "") if re.fullmatch(r"\d{1,3}(,\d{3})+", s) else s.replace(",", ".")
     if not re.fullmatch(r"\d*\.?\d*", s) or s in ("", "."):
-        raise AmountError(f"unparseable amount: {text!r}")
+        raise AmountError("unparseable amount")
     try:
         value = Decimal(s)
     except InvalidOperation as exc:
-        raise AmountError(f"unparseable amount: {text!r}") from exc
+        raise AmountError("unparseable amount") from exc
     _check_range(value, text)
     minor = int((value * _scale(currency)).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
     return -minor if neg else minor

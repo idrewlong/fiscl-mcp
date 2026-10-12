@@ -11,6 +11,17 @@ from fiscl.db import add_account, connect
 TODAY = date(2026, 10, 12)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_keychain_for_install_key(monkeypatch):
+    """Never let a test touch the developer's real OS keychain for the install key: use the 0600 file fallback."""
+    from fiscl import installkey
+
+    installkey.reset_cache()
+    monkeypatch.setattr(installkey, "_keychain", lambda: None)
+    yield
+    installkey.reset_cache()
+
+
 @pytest.fixture
 def cfg(tmp_path: Path):
     c = load_config(tmp_path / "home")
@@ -76,6 +87,8 @@ class FakeKeyring:
 
     def __init__(self):
         self.items: dict[tuple[str, str], str] = {}
+        # Entries whose delete fails like macOS does on a denied/locked item: PasswordDeleteError, item still there.
+        self.stuck: set[str] = set()
 
     def set_password(self, service, user, value):
         self.items[(service, user)] = value
@@ -84,7 +97,7 @@ class FakeKeyring:
         return self.items.get((service, user))
 
     def delete_password(self, service, user):
-        if (service, user) not in self.items:
+        if user in self.stuck or (service, user) not in self.items:
             raise PasswordDeleteError(user)
         del self.items[(service, user)]
 

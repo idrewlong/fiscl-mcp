@@ -23,7 +23,7 @@ from ..config import Config
 from ..guard import clean_text
 from ..importers.types import ParsedStatement, ParsedTxn
 from ..money import AmountError, parse_amount
-from . import base
+from . import base, connections
 from .base import Policy, SyncError
 
 PROVIDER = "teller"
@@ -184,6 +184,7 @@ class TellerConnector:
                 failures.append(exc)
                 continue
             self.item_status[item.ref] = "ok"
+            self._remember_enrollment(item, accounts)
             for acct in accounts:
                 if isinstance(acct, dict):
                     stmt = self._account(item, token, acct, start, end)
@@ -193,10 +194,25 @@ class TellerConnector:
             raise failures[0]
         return statements
 
+    def _remember_enrollment(self, item: TellerItem, accounts: list) -> None:
+        """Keep the raw enrollment id (needed to re-authorize that same enrollment) once we've seen it, but only if
+        it hashes to this connection's ref, so a stray id can never be attached to the wrong connection."""
+        name = _name(item.ref + ".eid")
+        if base.secret_get(name):
+            return
+        for acct in accounts:
+            eid = acct.get("enrollment_id") if isinstance(acct, dict) else None
+            if isinstance(eid, str) and connections.item_ref_hash(PROVIDER, eid) == item.ref:
+                base.secret_set(name, eid)
+                return
+
     def _fail_item(self, item: TellerItem, status: int | None) -> None:
         if status in (401, 403, 404):
             self.item_status[item.ref] = "needs_reauth"
-            self.warnings.append("a Teller connection needs to be re-authorized: run `fiscl connect teller` again")
+            self.warnings.append(
+                "a Teller connection needs to be re-authorized: run `fiscl connect teller --reconnect` "
+                "(add --institution NAME if you have several)"
+            )
         else:
             self.item_status[item.ref] = "error"
             self.warnings.append("Teller couldn't be reached for one connection; try again later")
@@ -312,6 +328,7 @@ class TellerConnector:
                             "from your Teller dashboard"
                         ) from exc
             base.secret_delete(_name(item.ref))
+            base.secret_delete(_name(item.ref + ".eid"))
 
 
 def _basic(token: str) -> str:

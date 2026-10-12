@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 from dataclasses import dataclass
 
-from .config import Config, append_toml_block, load_rules_raw
+from .config import Config, append_toml_block, load_rules_raw, toml_string
 from .db import get_or_create_category
 from .guard import GuardError, safe_regex
 from .money import AmountError, to_minor
@@ -119,6 +118,5 @@ def explain(cfg: Config, description: str, merchant: str, amount: int = -100, ac
 
 
 def append_merchant_rule(cfg: Config, merchant: str, category: str) -> None:
-    # json.dumps produces a valid TOML basic string for these simple values.
-    block = f"[[rule]]\nmerchant = {json.dumps(merchant)}\ncategory = {json.dumps(category)}\n"
+    block = f"[[rule]]\nmerchant = {toml_string(merchant)}\ncategory = {toml_string(category)}\n"
     append_toml_block(cfg.rules_file, block, tool="apply_categories")

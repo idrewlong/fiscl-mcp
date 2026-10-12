@@ -274,8 +274,14 @@ def secret_delete(name: str) -> None:
     try:
         kr.delete_password(KEYRING_SERVICE, name)
     except Exception as exc:
-        if type(exc).__name__ == "PasswordDeleteError":  # keyring.errors.PasswordDeleteError: no such entry
-            return
+        # keyring's macOS backend maps every failure (denied, auth failed, ...) to PasswordDeleteError, so the
+        # name alone proves nothing: it only means "not found" if the item is really gone now.
+        if type(exc).__name__ == "PasswordDeleteError":
+            try:
+                if kr.get_password(KEYRING_SERVICE, name) is None:
+                    return
+            except Exception:  # noqa: S110 - can't confirm it's gone, so fall through to the failure below
+                pass
         raise SyncError("couldn't delete a stored credential from the keychain; nothing was disconnected") from exc
 
 

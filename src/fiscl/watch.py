@@ -13,6 +13,7 @@ from watchdog.observers import Observer
 
 from .config import Config
 from .db import open_db
+from .guard import clean_text
 from .importers.core import SUPPORTED, import_file
 
 log = logging.getLogger("fiscl.watch")
@@ -49,6 +50,8 @@ def process_inbox_file(cfg: Config, path: Path) -> str:
     `account` set, otherwise they go to failed/ with a note."""
     if path.suffix.lower() not in SUPPORTED or path.parent != cfg.inbox or path.name.startswith("."):
         return "ignored"
+    if path.is_symlink() or not path.is_file():  # a symlink could point anywhere; a FIFO would block the read
+        return "ignored"
     if not _wait_until_stable(path):
         return "ignored"
     try:
@@ -59,7 +62,7 @@ def process_inbox_file(cfg: Config, path: Path) -> str:
         result = None
         error = f"unexpected error: {type(exc).__name__}"
     else:
-        error = result.error
+        error = clean_text(result.error, 200)
     if result is not None and result.status in ("ok", "duplicate_file"):
         _move(path, cfg.processed)
         log.info("imported %s: %s added, %s skipped", path.name, result.rows_added, result.rows_skipped)
@@ -91,7 +94,7 @@ class _Handler(FileSystemEventHandler):
 def start_watcher(cfg: Config):
     """Process anything already waiting in the inbox, then watch for new files."""
     for path in sorted(cfg.inbox.iterdir()):
-        if path.is_file():
+        if path.is_file() and not path.is_symlink():
             process_inbox_file(cfg, path)
     observer = Observer()
     observer.schedule(_Handler(cfg), str(cfg.inbox), recursive=False)
