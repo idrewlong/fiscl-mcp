@@ -524,6 +524,7 @@ def test_export_with_no_activity_still_produces_valid_files(conn, cfg, accounts)
     assert len(rows_of(detail)) == 1  # header only
 
 
+@posix
 def test_export_second_business_collision_leaves_nothing_behind(conn, cfg):
     studio, consult = two_biz(conn, cfg)
     add_txn(conn, studio, "2026-03-01", 100_000, "A", category=INCOME)

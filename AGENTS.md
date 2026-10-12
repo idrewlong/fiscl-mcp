@@ -16,7 +16,7 @@ Local-first personal + business finance MCP server. It imports bank exports (CSV
 | Lint + format check | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Unit tests | `uv run pytest -q` (~6s; `-m 'not smoke'` skips the stdio smoke test) |
-| HTTP server (loopback, bearer token, read-only by default) | `uv run fiscl serve --http` · token: `uv run fiscl http token show|rotate|forget` |
+| HTTP server (loopback, bearer token, read-only by default; clients must use the literal `http://127.0.0.1:PORT/mcp`, `localhost` is refused) | `uv run fiscl serve --http` · token: `uv run fiscl http token show|rotate|forget` |
 | Weekly digest | `uv run fiscl digest [--write]` |
 | Smoke (every tool over stdio) | `uv run python scripts/smoke.py` |
 | Build | `uv build` |
@@ -24,6 +24,7 @@ Local-first personal + business finance MCP server. It imports bank exports (CSV
 ## Layout
 ```
 src/fiscl/
+  loopback.py      reserves the other loopback family on a port (bind only, no listen); shared by http_transport and sync/connect
   notify.py        debounced resource-updated notifications (URIs only) after applied edits, syncs, imports
   http_transport.py  optional loopback HTTP transport: ASGI gate (bearer token, Origin/Host/method checks, rate limit) in front of the SDK app
   server.py        MCP wiring: one thin wrapper per tool → run() guard (open DB, call service, redact, audit)

@@ -145,6 +145,7 @@ def test_failed_write_leaves_no_partial_files(conn, cfg, seeded, monkeypatch):
     assert files_on_disk(cfg) == []
 
 
+@posix
 def test_missing_exports_dir_is_created_private(conn, cfg, seeded):
     os.rmdir(cfg.exports)
     export(conn, cfg, dry_run=False)

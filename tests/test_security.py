@@ -17,6 +17,8 @@ from fiscl.charts import CHART_HTML
 from fiscl.config import ConfigError, ensure_layout, load_config
 from fiscl.sync import simplefin
 
+from .conftest import posix
+
 
 class _Redirector(BaseHTTPRequestHandler):
     hits: list[str] = []
@@ -98,6 +100,7 @@ def test_chart_view_cannot_render_injected_markup():
     assert "connect-src" not in CHART_HTML or "connect-src 'none'" in CHART_HTML
 
 
+@posix
 def test_cli_creates_private_logs(tmp_path):
     home = tmp_path / "fh"
     old = os.umask(0o022)
@@ -188,6 +191,7 @@ async def test_tool_error_text_is_redacted_for_the_model(cfg):
     assert "4111111111111111" not in text  # not echoed at all; redact() is the backstop
 
 
+@posix
 def test_backup_file_is_private_even_if_original_is_loose(tmp_path):
     from fiscl.config import backup_file
 

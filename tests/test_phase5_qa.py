@@ -1,12 +1,13 @@
 """Phase 5 QA pass: raw-socket HTTP abuse against a real loopback server, notifications, digest edge cases, prompts.
 
-The socket tests talk to 127.0.0.1 only (plus ::1 when the host has it). Tests marked ``xfail(strict=True)`` pin a
-bug found in this pass: each fails today and must be flipped to a normal test when the owner fixes it.
+The socket tests talk to 127.0.0.1 only (plus ::1 when the host has it). The two bugs found in this pass (e-mail
+defanging, digest FX warning) were fixed and their xfail markers removed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import socket
 import threading
@@ -19,7 +20,7 @@ from fiscl import http_transport as ht
 from fiscl.demo import load_demo
 from fiscl.server import build_server
 
-from .conftest import TODAY
+from .conftest import TODAY, posix
 
 JSON_H = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
 INIT = {
@@ -218,8 +219,9 @@ def test_origin_alone_never_leaks_cors_even_on_the_wrong_port_host(live, token):
 
 def test_host_variants_over_real_socket(live, token):
     p = live.port
-    good = [f"127.0.0.1:{p}", f"localhost:{p}"]
+    good = [f"127.0.0.1:{p}"]
     bad = [
+        f"localhost:{p}",
         f"[::1]:{p}",
         f"127.0.0.1:{p + 1}",
         "127.0.0.1",
@@ -951,6 +953,7 @@ def test_dry_run_creates_nothing_not_even_the_folder(known, cfg):
     assert r["dry_run"] is True and "written" not in r and not cfg.digests.exists()
 
 
+@posix
 def test_apply_after_the_folder_vanished_recreates_it_private_and_matches_the_dry_run(known, cfg):
     cfg.digests.rmdir()
     plan = analysis.write_digest(known, cfg, week_ending="2026-10-11", today=TODAY)
@@ -989,6 +992,7 @@ def test_gap_in_the_suffixes_is_reused_in_order(known, cfg):
     )
 
 
+@posix
 def test_concurrent_writers_never_overwrite_each_other(known, cfg):
     results: list[object] = []
     lock = _threading.Lock()
@@ -1016,6 +1020,7 @@ def test_concurrent_writers_never_overwrite_each_other(known, cfg):
     assert all(mode(p) == 0o600 for p in cfg.digests.iterdir())
 
 
+@posix
 def test_symlinked_digests_folder_is_refused_for_dry_run_and_apply(known, cfg, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -1034,12 +1039,14 @@ def test_digests_folder_that_is_a_regular_file_is_refused(known, cfg):
         analysis.write_digest(known, cfg, week_ending="2026-10-11", dry_run=False, today=TODAY)
 
 
+@posix
 def test_loose_folder_mode_is_tightened_on_apply(known, cfg):
     os.chmod(cfg.digests, 0o755)
     analysis.write_digest(known, cfg, week_ending="2026-10-11", dry_run=False, today=TODAY)
     assert mode(cfg.digests) == 0o700
 
 
+@posix
 def test_ensure_layout_creates_a_private_digests_folder(cfg):
     assert cfg.digests.is_dir() and mode(cfg.digests) == 0o700
 
@@ -1089,13 +1096,13 @@ def test_hostile_names_in_the_written_file_match_the_tool_markdown(hostile, cfg)
     assert (cfg.home / r["path"]).read_text(encoding="utf-8") == dig(hostile, cfg, week_ending="2026-10-11")["markdown"]
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-1: bare e-mail addresses are not defanged, so GFM renders a mailto: link")
 def test_bare_email_addresses_are_not_left_clickable(conn, cfg):
-    acct = add_account(conn, "Checking", "checking")
-    add_txn(conn, acct, "2026-10-06", -5_000, "pay refunds@evil-example.com now", "Dining")
+    acct = add_account(conn, "Checking refunds@evil-example.com", "checking")
+    # The category is what the digest prints for a plain spending row (descriptions only surface in alerts).
+    add_txn(conn, acct, "2026-10-06", -5_000, "pay refunds@evil-example.com now", "pay refunds@evil-example.com now")
     conn.commit()
     md = dig(conn, cfg, week_ending="2026-10-11")["markdown"]
-    assert "evil-example.com" in md
+    assert md.count("evil-example.com") >= 2  # the text is still there, just not as an address
     assert not re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}", md)
 
 
@@ -1116,6 +1123,7 @@ async def test_cli_stdout_equals_the_tool_markdown_on_demo_data(demo, cfg, capsy
     assert capsys.readouterr().out == tool_md
 
 
+@posix
 def test_cli_digest_write_twice_numbers_the_files_and_the_third_dry_state_is_private(known, cfg, capsys):
     for want in ("digest-2026-W41.md", "digest-2026-W41-2.md"):
         assert cli.main(["--home", str(cfg.home), "digest", "--week-ending", "2026-10-11", "--write"]) == 0
@@ -1223,7 +1231,6 @@ def test_digest_json_flags_unconverted_rows(conn, cfg):
     assert d["meta"]["unconverted"]["count"] == 1  # ...and the JSON says so
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-2: markdown/file/CLI omit the unconverted-rows warning that meta carries")
 def test_digest_markdown_warns_when_foreign_rows_were_left_out(conn, cfg):
     from .test_fx import import_eur
 
@@ -1268,6 +1275,7 @@ def test_cli_non_numeric_port_is_an_argparse_error(cfg):
     assert e.value.code == 2
 
 
+@posix
 def test_a_second_local_process_cannot_share_the_live_port(live):
     for opts in (
         (socket.SO_REUSEADDR,),
@@ -1321,3 +1329,147 @@ def test_a_week_months_in_the_past_still_renders(demo, cfg):
         assert dig(conn, cfg, week_ending="2000-01-02")["spending"]["total"]["minor"] == 0
     finally:
         conn.close()
+
+
+# --- SEC-1: the other loopback family is reserved; `localhost` is refused ---------------------------
+
+
+def _have_ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as s:
+            s.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+needs_ipv6 = pytest.mark.skipif(not _have_ipv6_loopback(), reason="no IPv6 loopback on this machine")
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@needs_ipv6
+def test_sec1_ipv4_server_holds_ipv6_loopback_so_nobody_can_squat_it(live):
+    with socket.socket(socket.AF_INET6) as sq:
+        with pytest.raises(OSError) as e:
+            sq.bind(("::1", live.port))
+        assert e.value.errno == errno.EADDRINUSE
+
+
+@needs_ipv6
+def test_sec1_ipv6_server_holds_ipv4_loopback(cfg, token):
+    with Live(cfg, host="::1") as s, socket.socket() as sq:
+        with pytest.raises(OSError) as e:
+            sq.bind(("127.0.0.1", s.port))
+        assert e.value.errno == errno.EADDRINUSE
+
+
+@needs_ipv6
+def test_sec1_reservation_is_released_when_the_server_socket_closes(cfg, token):
+    sock = ht.bind_loopback("127.0.0.1", 0, allow_ephemeral=True)
+    port = sock.getsockname()[1]
+    sock.close()
+    with socket.socket(socket.AF_INET6) as again:
+        again.bind(("::1", port))
+
+
+@needs_ipv6
+def test_sec1_start_is_refused_when_the_other_family_is_taken(cfg, keychain, capsys):
+    port = _free_port()
+    with socket.socket(socket.AF_INET6) as squatter:
+        squatter.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        try:
+            squatter.bind(("::1", port))
+        except OSError:
+            pytest.skip("port raced away")
+        assert main(["--home", str(cfg.home), "serve", "--http", "--port", str(port), "--no-watch"]) == 2
+    err = capsys.readouterr().err
+    assert "::1" in err and str(port) in err and "refusing to start" in err
+    with socket.socket() as s:  # nothing was left bound on the IPv4 side
+        s.bind(("127.0.0.1", port))
+
+
+def test_sec1_bind_loopback_returns_an_already_listening_socket():
+    sock = ht.bind_loopback("127.0.0.1", 0, allow_ephemeral=True)
+    try:
+        with socket.socket() as client:  # connect() only succeeds against a listening socket
+            client.settimeout(2)
+            client.connect(("127.0.0.1", sock.getsockname()[1]))
+    finally:
+        sock.close()
+
+
+def test_sec1_localhost_host_header_is_421_over_a_real_socket(live, token):
+    assert live.post(auth=f"Bearer {token}", host=f"localhost:{live.port}")[0] == 421
+
+
+def test_sec1_banner_prints_the_literal_client_url(cfg, keychain, monkeypatch, capsys):
+    monkeypatch.setattr(ht, "serve", lambda *a, **k: None)
+    port = _free_port()
+    assert main(["--home", str(cfg.home), "serve", "--http", "--port", str(port), "--no-watch"]) == 0
+    err = capsys.readouterr().err
+    assert f"http://127.0.0.1:{port}/mcp" in err
+    assert "localhost" in err and "refused" in err
+
+
+# --- SEC-2: cross-site pings can't lock the real client out ------------------------------------
+
+
+@pytest.mark.parametrize("name", ["Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"])
+def test_sec2_sec_fetch_headers_are_403_even_with_a_valid_token(live, token, name):
+    status, headers, _ = live.post(auth=f"Bearer {token}", headers={name: "cross-site"})
+    assert status == 403 and no_cors(headers)
+
+
+def test_sec2_img_tag_style_gets_never_lock_out_the_right_token(cfg, token):
+    with Live(cfg, limiter=ht.AuthLimiter(Clock())) as s:
+        for _ in range(50):
+            status, _, _ = s.post(
+                method="GET",
+                body=b"",
+                headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"},
+            )
+            assert status == 403
+        for _ in range(50):  # no Authorization at all: 401, and never counted
+            assert s.post(method="GET", body=b"")[0] == 401
+        assert s.post(auth=f"Bearer {token}")[0] == 200
+
+
+def test_sec2_missing_authorization_does_not_read_the_keychain(cfg, token):
+    reads = []
+
+    def source():
+        reads.append(1)
+        return token
+
+    mcp = build_server(cfg, read_only=True)
+    app = ht.build_app(mcp, source, "127.0.0.1", 9000)
+    sent = []
+
+    async def send(msg):
+        sent.append(msg)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/mcp",
+        "client": ("127.0.0.1", 5000),
+        "headers": [(b"host", b"127.0.0.1:9000")],
+    }
+    asyncio.run(app(scope, receive, send))
+    assert sent[0]["status"] == 401 and reads == []
+
+
+def test_sec2_wrong_token_failures_still_count(cfg, token):
+    clock = Clock()
+    with Live(cfg, limiter=ht.AuthLimiter(clock)) as s:
+        for _ in range(ht.AUTH_MAX_FAILURES):
+            assert s.post(auth="Bearer bad")[0] == 401
+        assert s.post(auth=f"Bearer {token}")[0] == 429

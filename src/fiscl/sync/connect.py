@@ -8,12 +8,10 @@ the connection, and shuts down. It gives up after 10 minutes.
 
 from __future__ import annotations
 
-import errno
 import hmac
 import json
 import re
 import secrets
-import socket
 import sqlite3
 import sys
 import time
@@ -21,7 +19,9 @@ import urllib.parse
 import webbrowser
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
+from .. import loopback
 from ..config import Config
 from ..guard import clean_text
 from . import base, connections, plaid, qbo, teller
@@ -554,28 +554,17 @@ _PAGE_FAILED = b"<!doctype html><meta charset=utf-8><title>fiscl</title><p>Nothi
 _CODE = re.compile(r"[A-Za-z0-9\-_.~]{1,512}")
 
 
-def _reserve_ipv6_loopback(port: int) -> socket.socket | None:
+def _reserve_ipv6_loopback(port: int) -> object | None:
     """The redirect URI says `localhost`, which a browser may resolve to ::1 as well as 127.0.0.1, but the server only
-    binds 127.0.0.1. Bind (never listen on) ::1 on the same port so no other local program can sit there and receive
-    the authorization code; connections to a bound, non-listening socket are refused and the browser falls back to
-    127.0.0.1. No SO_REUSEADDR/SO_REUSEPORT: the reservation must fail if anything else holds the port. Hosts without
-    an IPv6 loopback skip it."""
+    binds 127.0.0.1. Reserve ::1 on the same port (see loopback.py) so no other local program can sit there and receive
+    the authorization code. Hosts without an IPv6 loopback skip it."""
     try:
-        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    except OSError:
-        return None
-    try:
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)  # only ::1; 127.0.0.1 stays ours
-        sock.bind(("::1", port))
-    except OSError as exc:
-        sock.close()
-        if exc.errno in (errno.EADDRINUSE, errno.EACCES):
-            raise SyncError(
-                f"another program is listening on localhost port {port}; close it or change redirect_port "
-                "under [connectors.qbo]"
-            ) from exc
-        return None  # EADDRNOTAVAIL and friends: no IPv6 loopback on this machine
-    return sock
+        return loopback.reserve_other_family(BIND_HOST, port)
+    except loopback.LoopbackBusy as exc:
+        raise SyncError(
+            f"another program is listening on localhost port {port}; close it or change redirect_port "
+            "under [connectors.qbo]"
+        ) from exc
 
 
 class OAuthCallbackServer(HTTPServer):
@@ -586,7 +575,7 @@ class OAuthCallbackServer(HTTPServer):
     allow_reuse_address = sys.platform != "win32"
 
     def __init__(self, port: int, state: str, on_callback: Callable[[str, str], object]):
-        self._reserved: socket.socket | None = None
+        self._reserved: Any = None
         try:
             super().__init__((BIND_HOST, port), _CallbackHandler)
         except OSError as exc:

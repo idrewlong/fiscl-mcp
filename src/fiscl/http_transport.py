@@ -8,7 +8,9 @@ tests/test_http_transport.py.
 - Every request needs `Authorization: Bearer <token>`; the token lives only in the OS keychain.
 - Any `Origin` header is rejected (browsers always send one cross-origin; native MCP clients do not). No CORS
   headers are ever produced, because this module never writes a header it was not explicitly given below.
-- `Host` must equal `127.0.0.1:<port>` (or `[::1]:<port>`) exactly: no wildcard ports.
+- `Host` must equal `127.0.0.1:<port>` (or `[::1]:<port>`) exactly: no wildcard ports and no `localhost`.
+- The other loopback family is reserved on the same port for the server's lifetime (loopback.py), so nothing else
+  can sit on `[::1]:<port>` while clients talk to `127.0.0.1:<port>` (or the reverse).
 - The gate is plain ASGI middleware in front of the SDK app. The SDK's OAuth `AuthSettings` is deliberately unused
   (it models an OAuth resource server); the SDK's `TransportSecuritySettings` is a second Host/Origin check.
 - Nothing here logs the token, the Authorization header, request bodies, or URLs.
@@ -32,6 +34,7 @@ import anyio
 import uvicorn
 from mcp.server.transport_security import TransportSecuritySettings
 
+from . import loopback
 from .sync import base
 
 log = logging.getLogger("fiscl.http")
@@ -80,11 +83,27 @@ def is_loopback_address(addr: object) -> bool:
     return ip.is_loopback
 
 
+class ServerSocket(socket.socket):
+    """The listening socket plus the reservation of the other loopback family; closing it releases both."""
+
+    reserved: socket.socket | None = None
+
+    def close(self) -> None:
+        super().close()
+        if self.reserved is not None:
+            self.reserved.close()
+            self.reserved = None
+
+
 def bind_loopback(host: str, port: int, *, allow_ephemeral: bool = False) -> socket.socket:
-    """Bind (not listen) a TCP socket on a loopback literal. Never retries another port."""
+    """Bind and listen on a loopback literal, and reserve the other loopback family on the same port (SEC-1).
+
+    Never retries another port. `localhost` can resolve to either family, and the families have separate port
+    spaces, so without the reservation a local program could bind the other one and receive a client's bearer token.
+    """
     validate_bind(host, port, allow_ephemeral=allow_ephemeral)
     family = socket.AF_INET6 if host == "::1" else socket.AF_INET
-    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock = ServerSocket(family, socket.SOCK_STREAM)
     try:
         if sys.platform != "win32":  # on Windows SO_REUSEADDR would let another process share the port
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -93,6 +112,17 @@ def bind_loopback(host: str, port: int, *, allow_ephemeral: bool = False) -> soc
         sock.bind((host, port))
         if not is_loopback_address(sock.getsockname()[0]):  # defense in depth; cannot happen with the check above
             raise HttpConfigError("refusing to serve: the socket is not bound to a loopback address")
+        # Listen at once: on Linux a second SO_REUSEADDR bind can succeed while neither socket listens.
+        sock.listen(socket.SOMAXCONN)
+        bound_port = sock.getsockname()[1]
+        try:
+            sock.reserved = loopback.reserve_other_family(host, bound_port)
+        except loopback.LoopbackBusy as exc:
+            other = "::1" if host == "127.0.0.1" else "127.0.0.1"
+            raise HttpConfigError(
+                f"refusing to start: another program holds {other} port {bound_port}, which could capture the bearer "
+                "token from a client that resolves localhost to that address; free it or pick another with --port"
+            ) from exc
     except OSError as exc:
         sock.close()
         raise HttpConfigError(
@@ -106,10 +136,17 @@ def bind_loopback(host: str, port: int, *, allow_ephemeral: bool = False) -> soc
 
 
 def allowed_hosts(host: str, port: int) -> tuple[str, ...]:
-    """Exact Host header values, port included."""
+    """Exact Host header values, port included. `localhost` is deliberately absent: it may resolve to the other
+    loopback family, so clients must use the literal address from `client_url`."""
     if host == "::1":
         return (f"[::1]:{port}",)
-    return (f"127.0.0.1:{port}", f"localhost:{port}")
+    return (f"127.0.0.1:{port}",)
+
+
+def client_url(host: str, port: int) -> str:
+    """The one URL clients should be configured with (a literal address, never `localhost`)."""
+    shown = f"[{host}]" if ":" in host else host
+    return f"http://{shown}:{port}{MCP_PATH}"
 
 
 # --- token -------------------------------------------------------------------------------------
@@ -216,7 +253,8 @@ def _bearer(values: list[str]) -> str | None:
 
 
 class GateMiddleware:
-    """Outermost ASGI app. Order: client address, Host, Origin, path/method, rate limit, bearer, content type."""
+    """Outermost ASGI app. Order: client address, Host, Origin/Sec-Fetch-*, path/method, Authorization present,
+    rate limit, bearer, content type."""
 
     def __init__(
         self,
@@ -252,7 +290,8 @@ class GateMiddleware:
         for k, v in scope.get("headers", []):
             if k == b"host":
                 host_values.append(v.decode("latin-1"))
-            elif k == b"origin":
+            elif k in (b"origin", b"sec-fetch-site", b"sec-fetch-mode", b"sec-fetch-dest"):
+                # Browsers add Sec-Fetch-* to every request, even no-CORS ones like <img src> that carry no Origin.
                 has_origin = True
             elif k == b"authorization":
                 auth_values.append(v.decode("latin-1"))
@@ -273,6 +312,12 @@ class GateMiddleware:
             await _reply(send, 405, headers=((b"allow", ", ".join(ALLOWED_METHODS).encode()),))
             return
 
+        if not auth_values:
+            # No credentials at all: not a guess at the token, so it neither feeds nor waits on the limiter (a page
+            # that can only fire header-less requests must not be able to lock the real client out) and costs no
+            # keychain read.
+            await _reply(send, 401, headers=((b"www-authenticate", b"Bearer"),))
+            return
         if self._limiter.locked():
             await _reply(send, 429, headers=((b"retry-after", str(self._limiter.retry_after()).encode()),))
             return

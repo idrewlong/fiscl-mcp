@@ -13,7 +13,7 @@ from fiscl.db import MIGRATIONS, connect
 from fiscl.guard import GuardError
 from fiscl.recurring import refresh_recurring
 
-from .conftest import TODAY, add_txn
+from .conftest import TODAY, add_txn, posix
 
 
 def _groups(conn, cfg, **kw):
@@ -24,6 +24,7 @@ def _groups(conn, cfg, **kw):
 # --- migration 3 -----------------------------------------------------------------------------
 
 
+@posix
 def test_v1_database_migrates_to_latest_with_backup(cfg):
     raw = sqlite3.connect(cfg.db_path)
     for sql in MIGRATIONS[:2]:
@@ -343,6 +344,7 @@ def test_dismiss_recurring_errors(conn, cfg, accounts):
 HEADER = "# my hand-written header\n# Monthly budgets in dollars.\n"
 
 
+@posix
 def test_set_budget_writes_toml_with_backup_and_budget_status_follows(conn, cfg, accounts):
     cfg.budgets_file.write_text(HEADER + '\n[[budget]]\ncategory = "Dining"\nmonthly = 400.00\n', encoding="utf-8")
     add_txn(conn, accounts["checking"], "2026-10-02", -12000, "RESTAURANT", "Dining")

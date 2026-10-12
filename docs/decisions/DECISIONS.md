@@ -95,6 +95,12 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - Read-only by default: every tool not annotated `readOnlyHint=true` (including `sync_accounts`) is removed from the HTTP server unless `[http] allow_writes = true`. New tools must opt in as read-only.
 - `http_transport.py` is the second named exception (with `sync/connect.py`) in the AST network-import guard.
 
+## 2026-10-12 — Phase 5 QA and security fixes
+- SEC-1: the HTTP server reserves the other loopback family on its port (`loopback.reserve_other_family`, shared with the QBO callback; bind only, no reuse options; busy refuses to start, exit 2; no IPv6 loopback skips). `localhost:<port>` is no longer an allowed Host: clients use the literal URL printed in the banner. `bind_loopback` calls `listen()` immediately. `loopback.py` is the third named socket exception in the AST guard; `connect.py` no longer imports `socket`.
+- SEC-2: any `Sec-Fetch-Site/Mode/Dest` is treated like `Origin` (403). A request with no `Authorization` header gets 401 before the limiter and the keychain read; only presented-but-wrong credentials count toward lockout.
+- SEC-3: the AST guard also covers `httpx2`, `mcp.client`, `starlette.testclient` and rejects anyio's `connect_tcp`/`create_tcp_listener`-style calls anywhere in `src/`.
+- Markdown escaping also escapes `@` (`refunds\@example.com`), so GFM won't autolink e-mail addresses. The digest Markdown, file and CLI now carry the unconverted-rows / home-currency warnings from `meta` near the top.
+
 ## 2026-10-12 — Phase 4 review fixes and Phase 5 notifications/digest
 - Statements without a stated currency (QIF; CSV profiles without `currency`) adopt the account's currency. A stated currency that differs from the account's is refused. OFX `CURDEF` is validated against ISO 4217 at parse time.
 - A capped QBO read (50 pages) never advances the cursor or replaces the mirror. Invoices deleted in QuickBooks stay in the mirror until forget + reconnect (known limitation, noted in `receivables`).

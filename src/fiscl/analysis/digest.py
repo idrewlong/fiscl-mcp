@@ -243,9 +243,21 @@ def weekly_digest(conn, cfg: Config, week_ending=None, scope="personal", today=N
         "freshness": spend_meta["data_freshness"],
         "notes": notes,
     }
-    result["markdown"] = render_markdown(result)
     result["meta"] = meta(conn, cfg, start, end, row_count=len(alerts))
+    # The totals above silently exclude rows with no exchange rate; the file and the CLI print only the Markdown,
+    # so the warning must travel in it too. Both strings are fixed prose from fx.py.
+    notes.extend(w for w in _fx_warnings(result["meta"]))
+    result["markdown"] = render_markdown(result)
     return result
+
+
+def _fx_warnings(m: dict) -> list[str]:
+    out = []
+    if m.get("unconverted"):
+        out.append(m["unconverted"]["note"])
+    if m.get("fx_notice"):
+        out.append(m["fx_notice"])
+    return out
 
 
 # --- Markdown --------------------------------------------------------------------------------------------------------
@@ -275,6 +287,12 @@ def render_markdown(d: dict) -> str:
         "",
         f"Data through: {fresh or 'no accounts'}",
         "",
+    ]
+    warnings = _fx_warnings(d.get("meta", {}))
+    if warnings:
+        lines += [f"**Warning:** {md_escape(w)}" for w in warnings]
+        lines.append("")
+    lines += [
         "## Spending",
         "",
         f"- Total: {_m(sp['total'])}",

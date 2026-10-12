@@ -17,7 +17,7 @@ from fiscl.importers.core import ImportFailed, _resolve_account, import_statemen
 from fiscl.importers.ofx import OFXError, parse_ofx
 from fiscl.importers.types import ParsedStatement, ParsedTxn
 
-from .conftest import TODAY
+from .conftest import TODAY, posix
 
 # --- SEC-10: cloud-sync detection ------------------------------------------------------------------------------------
 
@@ -69,6 +69,7 @@ def test_demo_allowed_on_empty_or_demo_only_and_with_force(cfg, conn, capsys):
 # --- SEC-12: doctor permissions --------------------------------------------------------------------------------------
 
 
+@posix
 def test_doctor_repairs_baks_inbox_archives_demo_and_profiles(cfg, conn, capsys):
     load_demo(conn, cfg, today=TODAY)
     conn.commit()
@@ -142,6 +143,7 @@ def _answer(monkeypatch, text):
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": text)
 
 
+@posix
 def test_key_export_import_roundtrip_keeps_account_hashes(cfg, tmp_path, monkeypatch, capsys):
     key = installkey.install_key(cfg)
     dest = tmp_path / "out" / "key.txt"

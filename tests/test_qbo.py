@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from mcp import Client
 
-from fiscl import analysis, cli
+from fiscl import analysis, cli, loopback
 from fiscl.config import ConfigError, load_config
 from fiscl.guard import GuardError
 from fiscl.server import build_server
@@ -970,7 +970,7 @@ def test_without_an_ipv6_loopback_the_reservation_is_skipped(cfg, port, monkeypa
                 raise OSError(errno.EAFNOSUPPORT, "no ipv6")
             return real(family, *a, **k)
 
-    monkeypatch.setattr(connect.socket, "socket", Fake)
+    monkeypatch.setattr(loopback.socket, "socket", Fake)
     server = connect.make_oauth_server(port, "s", lambda c, r: "x")
     try:
         assert server._reserved is None

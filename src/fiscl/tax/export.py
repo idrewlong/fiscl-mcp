@@ -65,7 +65,8 @@ def csv_cell(value: object) -> str:
 
 
 _MD_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
-_MD_PUNCT = re.compile(r"[&<>\\`*_\[\](){}#|!~]")
+# `@` is escaped too: GFM auto-links bare e-mail addresses (mailto:), and `refunds\@example.com` stays readable.
+_MD_PUNCT = re.compile(r"[&<>\\`*_\[\](){}#|!~@]")
 _MD_SCHEME = re.compile(r"(?<=[A-Za-z])://")
 _MD_WWW = re.compile(r"\b(www)\.", re.IGNORECASE)
 

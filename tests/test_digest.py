@@ -17,7 +17,7 @@ from fiscl.demo import load_demo
 from fiscl.guard import GuardError
 from fiscl.server import build_server
 
-from .conftest import TODAY, add_txn
+from .conftest import TODAY, add_txn, posix
 
 WEEK = ("2026-10-05", "2026-10-11")  # Monday to Sunday; ISO week 41
 
@@ -122,6 +122,7 @@ def test_dry_run_writes_nothing_and_names_the_iso_week(demo, cfg):
     assert "written" not in r
 
 
+@posix
 def test_apply_writes_private_file_then_numbers_the_next(demo, cfg):
     first = write(demo, cfg, dry_run=False)
     second = write(demo, cfg, dry_run=False)
@@ -143,6 +144,7 @@ def test_tenth_file_for_a_week_is_refused(demo, cfg):
     assert len(os.listdir(cfg.digests)) == 9
 
 
+@posix
 def test_a_symlinked_digests_folder_is_refused(demo, cfg, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -155,6 +157,7 @@ def test_a_symlinked_digests_folder_is_refused(demo, cfg, tmp_path):
     assert os.listdir(elsewhere) == []
 
 
+@posix
 def test_an_existing_symlink_is_never_followed(demo, cfg, tmp_path):
     target = tmp_path / "victim.txt"
     target.write_text("keep", encoding="utf-8")
@@ -209,6 +212,7 @@ def test_cli_digest_bad_date_exits_nonzero(demo, cfg, capsys):
     assert cli.main(["--home", str(cfg.home), "digest", "--week-ending", "nope"]) == 1
 
 
+@posix
 def test_doctor_repairs_digests_permissions_and_flags_a_symlink(demo, cfg, capsys, tmp_path):
     os.chmod(cfg.digests, 0o755)
     (cfg.digests / "digest-2026-W41.md").write_text("x", encoding="utf-8")

@@ -148,7 +148,10 @@ def test_loopback_address_check_handles_mapped_and_garbage():
 
 
 def test_allowed_hosts_are_port_specific():
-    assert ht.allowed_hosts("127.0.0.1", 9001) == ("127.0.0.1:9001", "localhost:9001")
+    assert ht.allowed_hosts("127.0.0.1", 9001) == ("127.0.0.1:9001",)
+    assert ht.allowed_hosts("::1", 9001) == ("[::1]:9001",)
+    assert ht.client_url("127.0.0.1", 9001) == "http://127.0.0.1:9001/mcp"
+    assert ht.client_url("::1", 9001) == "http://[::1]:9001/mcp"
 
 
 # --- gate: auth, host, origin, methods ---------------------------------------------------------
@@ -201,10 +204,11 @@ async def test_host_must_match_exactly_including_port(app, token, host):
         assert r.status_code == 421
 
 
-async def test_localhost_with_the_right_port_is_accepted_for_the_ipv4_bind(app, token):
-    async with app.inner.router.lifespan_context(app.inner), asgi_client(app) as c:
+async def test_localhost_is_refused_even_with_the_right_port_and_token(app, token):
+    # SEC-1: `localhost` may resolve to the other loopback family; clients must use the literal address.
+    async with asgi_client(app) as c:
         r = await c.post("/mcp", json=INIT, headers={**JSON, **bearer(token), "host": f"localhost:{PORT}"})
-        assert r.status_code == 200
+        assert r.status_code == 421
 
 
 async def test_non_loopback_peer_is_403_even_with_everything_else_right(app, token):

@@ -95,7 +95,7 @@ import stat  # noqa: E402
 from fiscl import db, installkey  # noqa: E402
 from fiscl.importers.core import import_file  # noqa: E402
 
-from .conftest import FakeKeyring, write  # noqa: E402
+from .conftest import FakeKeyring, posix, write  # noqa: E402
 from .test_importers import OFX  # noqa: E402
 
 OFX_KEY = "123456789:5550001234"
@@ -124,6 +124,7 @@ def test_sec3_legacy_account_upgrades_without_duplicating(conn, cfg, tmp_path):
     assert r2.rows_added == 1 and conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
 
 
+@posix
 def test_sec3_key_file_is_private_created_once_and_reused(cfg):
     key = installkey.install_key(cfg)
     path = cfg.home / ".install_key"
@@ -133,6 +134,7 @@ def test_sec3_key_file_is_private_created_once_and_reused(cfg):
     assert installkey.account_hash(cfg, "a:b") == installkey.account_hash(cfg, "a:b")
 
 
+@posix
 def test_sec3_key_file_is_never_overwritten(cfg):
     path = cfg.home / ".install_key"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -224,6 +226,7 @@ def test_sec5_error_txt_is_capped(cfg):
 # SEC-8: the inbox watcher ignores symlinks and non-regular files
 
 
+@posix
 def test_sec8_symlinked_inbox_file_is_ignored(cfg, tmp_path):
     from fiscl.watch import process_inbox_file
 
@@ -234,6 +237,7 @@ def test_sec8_symlinked_inbox_file_is_ignored(cfg, tmp_path):
     assert link.is_symlink() and target.exists() and not list(cfg.processed.iterdir())
 
 
+@posix
 def test_sec8_fifo_is_ignored(cfg):
     from fiscl.watch import process_inbox_file
 

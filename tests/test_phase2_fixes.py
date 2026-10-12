@@ -539,17 +539,31 @@ NETWORK_MODULES = {
     "aiohttp",
     "websockets",
     "uvicorn",
+    "httpx2",  # the SDK's HTTP client (a distinct package name from httpx)
+    "mcp.client",
+    "starlette.testclient",
+}
+# anyio opens sockets without importing `socket`; none of these calls may appear anywhere in src/.
+FORBIDDEN_ANYIO_CALLS = {
+    "connect_tcp",
+    "connect_unix",
+    "create_tcp_listener",
+    "create_unix_listener",
+    "create_udp_socket",
+    "create_connected_udp_socket",
 }
 # connect.py's loopback-only one-shot server (127.0.0.1, random port, token URL) is the single allowed exception.
-# It imports `socket` only to reserve [::1] on the QuickBooks redirect port (bind without listen), so a local program
-# can't squat the address `localhost` may resolve to; it never connects anywhere.
 # http_transport.py (Phase 5) is the second named loopback exception and the only module that opens a *listening*
 # socket for the MCP server: it binds the literal 127.0.0.1 / ::1 itself (`socket`) and serves through `uvicorn`,
-# behind a bearer-token/Host/Origin gate (tests/test_http_transport.py). Any other new network import still fails here.
+# behind a bearer-token/Host/Origin gate (tests/test_http_transport.py).
+# loopback.py is the third: it imports `socket` only to bind (never listen, accept or connect) the *other* loopback
+# family on the same port, so a local program can't squat the address `localhost` may resolve to. connect.py and
+# http_transport.py share it. Any other new network import still fails here.
 ALLOWED_NETWORK_IMPORTS = {
     "sync/base.py": {"urllib.request", "ssl"},
-    "sync/connect.py": {"http.server", "socket"},
+    "sync/connect.py": {"http.server"},
     "http_transport.py": {"socket", "uvicorn"},
+    "loopback.py": {"socket"},
 }
 
 
@@ -571,6 +585,27 @@ def test_sec9_only_base_opens_network_connections_and_connect_serves_loopback():
         if mods:
             found[rel] = mods
     assert found == ALLOWED_NETWORK_IMPORTS
+
+
+def test_sec9_no_anyio_socket_calls_in_src():
+    for rel, tree in _src_trees():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in FORBIDDEN_ANYIO_CALLS, (rel, node.func.attr)
+
+
+def test_sec9_anyio_call_check_catches_a_planted_call():
+    tree = ast.parse("import anyio\nasync def f():\n    await anyio.connect_tcp('example.com', 80)\n")
+    hits = [
+        n.func.attr
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in FORBIDDEN_ANYIO_CALLS
+    ]
+    assert hits == ["connect_tcp"]
+
+
+def test_sec9_network_module_list_covers_the_sdk_client_and_test_client():
+    assert {"httpx2", "mcp.client", "starlette.testclient"} <= NETWORK_MODULES
 
 
 def test_sec9_no_dynamic_imports_in_src():

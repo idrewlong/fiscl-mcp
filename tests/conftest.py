@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from fiscl.config import ensure_layout, load_config
 from fiscl.db import add_account, connect
 
 TODAY = date(2026, 10, 12)
+
+# For tests that assert POSIX file modes, symlinks, FIFOs or Unix-only socket semantics.
+posix = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions, symlinks, FIFOs and socket semantics")
 
 # The forbidden-endpoint source scans (test_connectors.py, test_phase2_fixes.py) match path fragments such as
 # "/income/" anywhere in src/. This is the single, exact exception: a printed-form URL kept as reference data in the

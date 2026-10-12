@@ -116,8 +116,11 @@ def _serve_http(cfg, args) -> int:
         from .watch import start_watcher
 
         observer = start_watcher(cfg, on_imported=lambda: mcp.notifier.changed("import"))
-    shown = f"[{host}]" if ":" in host else host
-    print(f"fiscl listening on http://{shown}:{port}{ht.MCP_PATH}", file=sys.stderr)
+    print(f"fiscl listening on {ht.client_url(host, port)}", file=sys.stderr)
+    print(
+        "clients: configure exactly that URL; `localhost` is refused (it may resolve to another address)",
+        file=sys.stderr,
+    )
     print("auth: Authorization: Bearer <token>; print it with `fiscl http token show`", file=sys.stderr)
     if not cfg.http_allow_writes:
         print("tools: read-only (set [http] allow_writes = true to expose write tools)", file=sys.stderr)
