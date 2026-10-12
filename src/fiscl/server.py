@@ -337,6 +337,77 @@ def build_server(cfg: Config) -> MCPServer:
 
     @mcp.tool(
         annotations=READ_ONLY,
+        description=(
+            "Unusual activity in a date range (default last 30 days): duplicate charges, a charge far above a "
+            "merchant's usual, a new merchant with a large first charge, fees and interest, and category spending "
+            "on pace to run well above its 3-month median. Regular bills and recurring charges are skipped. "
+            "sensitivity: low | normal | high. Each finding has a `question`: present findings to the user as "
+            "questions to check, never as conclusions or accusations."
+        ),
+    )
+    def find_anomalies(
+        start_date: DateArg = None,
+        end_date: DateArg = None,
+        sensitivity: Annotated[str, Field(description="low | normal | high")] = "normal",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        return run(
+            "find_anomalies",
+            analysis.find_anomalies,
+            from_=start_date,
+            to=end_date,
+            sensitivity=sensitivity,
+            limit=limit,
+        )
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "Subscription review: free or $1 trials that turned into paid charges, overlapping services (several "
+            "streaming, music, cloud-storage, news or fitness subscriptions), price changes with the annualized "
+            "difference, and annual renewals due in the next 30 days. Present each item as a question for the "
+            "user (do they still want it?), not as a recommendation to cancel."
+        ),
+    )
+    def subscription_watchdog() -> dict[str, Any]:
+        return run("subscription_watchdog", analysis.subscription_watchdog)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "Refunds: credits received in the last `days` (default 90) matched to the original purchase, plus "
+            "expected refunds, purchases the user tagged `refund-pending` that have no covering credit yet, with "
+            "days waiting. Ask the user whether a waiting refund is still pending; do not assume it was lost."
+        ),
+    )
+    def refund_tracker(days: Annotated[int, Field(description="Look-back window, 1-365")] = 90) -> dict[str, Any]:
+        return run("refund_tracker", analysis.refund_tracker, days=days)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "History for one merchant: monthly spending for the last `months` (default 12, zero months included), "
+            "charge count, average ticket, first and last seen, and any recurring-charge detection for it."
+        ),
+    )
+    def merchant_history(merchant: str, months: Annotated[int, Field(description="1-60")] = 12) -> dict[str, Any]:
+        return run("merchant_history", analysis.merchant_history, merchant=merchant, months=months)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "Monthly spending trend for one category over the last `months` (default 12, zero months included): "
+            "direction (up | down | flat | insufficient_data), slope per month, 3-month median, and the budget "
+            "if one is set. The current partial month is excluded from the trend. scope: all | personal | business."
+        ),
+    )
+    def category_trend(
+        category: str, months: Annotated[int, Field(description="1-60")] = 12, scope: ScopeArg = "all"
+    ) -> dict[str, Any]:
+        return run("category_trend", analysis.category_trend, category=category, months=months, scope=scope)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
         description=("Accounts with type, last 4 digits, latest balance, and how recent their data is."),
     )
     def list_accounts(include_archived: bool = False) -> dict[str, Any]:

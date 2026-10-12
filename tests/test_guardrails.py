@@ -36,6 +36,11 @@ def test_core_makes_no_network_calls(conn, cfg, monkeypatch):
         conn, cfg, debts=[{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}], today=TODAY
     )
     analysis.goal_progress(conn, cfg, today=TODAY)
+    analysis.find_anomalies(conn, cfg, today=TODAY)
+    analysis.subscription_watchdog(conn, cfg, today=TODAY)
+    analysis.refund_tracker(conn, cfg, today=TODAY)
+    analysis.merchant_history(conn, cfg, merchant="Kroger Gulfport", today=TODAY)
+    analysis.category_trend(conn, cfg, category="Groceries", today=TODAY)
     analysis.manage_asset(conn, cfg, action="add", name="Truck", kind="vehicle", value=1, today=TODAY)
     analysis.manage_goal(conn, cfg, action="add", name="Trip", target=10, today=TODAY)
     for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget"):

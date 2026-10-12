@@ -48,11 +48,26 @@ async def test_tools_listed_with_annotations(demo):
         "debt_payoff",
         "manage_goal",
         "goal_progress",
+        "find_anomalies",
+        "subscription_watchdog",
+        "refund_tracker",
+        "merchant_history",
+        "category_trend",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
     assert tools["apply_categories"].annotations.read_only_hint is False
-    for name in ("net_worth", "afford", "debt_payoff", "goal_progress"):
+    for name in (
+        "net_worth",
+        "afford",
+        "debt_payoff",
+        "goal_progress",
+        "find_anomalies",
+        "subscription_watchdog",
+        "refund_tracker",
+        "merchant_history",
+        "category_trend",
+    ):
         assert tools[name].annotations.read_only_hint is True, name
     write_tools = (
         "add_note",
@@ -82,6 +97,12 @@ async def test_every_read_tool_returns_meta_and_display_amounts(demo):
             ("afford", {"amount": 2000}),
             ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]}),
             ("goal_progress", {}),
+            ("find_anomalies", {}),
+            ("find_anomalies", {"sensitivity": "high", "limit": 5}),
+            ("subscription_watchdog", {}),
+            ("refund_tracker", {"days": 30}),
+            ("merchant_history", {"merchant": "Kroger Gulfport"}),
+            ("category_trend", {"category": "Groceries", "months": 6}),
         ]:
             r = await c.call_tool(name, args)
             assert not r.is_error, (name, r.content)
@@ -184,6 +205,10 @@ async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, 
             ("afford", {"amount": -5}),
             ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000}]}),
             ("goal_progress", {"name": "missing"}),
+            ("find_anomalies", {"sensitivity": "paranoid"}),
+            ("refund_tracker", {"days": 0}),
+            ("merchant_history", {"merchant": "Nobody Inc"}),
+            ("category_trend", {"category": "Nope"}),
         ]:
             assert (await c.call_tool(name, args)).is_error, name
         for name, args in calls.items():
