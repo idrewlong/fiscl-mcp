@@ -44,7 +44,7 @@ class Profile:
         try:
             p = cls(**data)
         except TypeError as exc:
-            raise CSVImportError(f"profile {source}: {exc}") from exc
+            raise CSVImportError(f"profile {source}: has an unknown field or is missing a required one") from exc
         if not p.amount_column and not (p.debit_column or p.credit_column):
             raise CSVImportError(f"profile {source}: needs amount_column or debit_column/credit_column")
         if p.amount_sign not in ("as_is", "invert"):
@@ -159,7 +159,7 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
     if profile_name:
         profile = next((p for p in profiles if p.name == profile_name), None)
         if profile is None:
-            raise CSVImportError(f"no profile named {profile_name!r}")
+            raise CSVImportError("no CSV profile with that name exists in the profiles folder")
     else:
         profile = match_profile(text, profiles)
         if profile is None:

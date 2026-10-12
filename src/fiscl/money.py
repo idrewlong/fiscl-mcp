@@ -82,7 +82,7 @@ def to_minor(value: int | float | str | Decimal, currency: str = "USD") -> int:
     try:
         d = Decimal(str(value))
     except InvalidOperation as exc:
-        raise AmountError(f"not a number: {value!r}") from exc
+        raise AmountError("not a number") from exc
     _check_range(d, value)
     return int((d * _scale(currency)).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
 

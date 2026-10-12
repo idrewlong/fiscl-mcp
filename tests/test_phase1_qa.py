@@ -425,7 +425,8 @@ async def test_every_new_write_tool_is_local_write_and_errors_not_crashes(demo):
             "manage_asset", "manage_goal",
         ):  # fmt: skip
             ann = tools[name].annotations
-            assert ann.read_only_hint is False and ann.destructive_hint is False, name
+            # These can remove or overwrite data (SEC-9), so they carry the destructive hint.
+            assert ann.read_only_hint is False and ann.destructive_hint is True, name
         for name in ("net_worth", "afford", "debt_payoff", "goal_progress", "find_anomalies",
                      "subscription_watchdog", "refund_tracker", "merchant_history", "category_trend"):  # fmt: skip
             assert tools[name].annotations.read_only_hint is True, name

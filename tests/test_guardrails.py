@@ -48,6 +48,72 @@ def test_core_makes_no_network_calls(conn, cfg, monkeypatch):
     build_chart(conn, cfg, kind="category_trend", category="Groceries", today=TODAY)
 
 
+# Arguments for every MCP tool except sync_accounts (the only one allowed to touch the network). The test below
+# fails when a tool is registered that is missing here, so new tools are covered automatically.
+NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
+    "show_chart": {"kind": "spending_by_category"},
+    "query_transactions": {},
+    "spending_summary": {},
+    "cash_flow": {},
+    "detect_recurring": {},
+    "budget_status": {},
+    "suggest_budgets": {},
+    "forecast_cash": {},
+    "net_worth": {},
+    "afford": {"amount": 2000},
+    "debt_payoff": {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]},
+    "goal_progress": {},
+    "find_anomalies": {},
+    "subscription_watchdog": {},
+    "refund_tracker": {},
+    "merchant_history": {"merchant": "Kroger Gulfport"},
+    "category_trend": {"category": "Groceries"},
+    "list_accounts": {},
+    "import_status": {},
+    "list_uncategorized": {},
+    "apply_categories": {"items": [{"merchant": "Kroger Gulfport", "category": "Groceries"}]},
+    "add_note": {"transaction_id": 1, "note": "n"},
+    "tag_transactions": {"items": [{"transaction_ids": [1], "add": ["x"]}]},
+    "split_transaction": {"transaction_id": 1, "parts": []},
+    "dismiss_recurring": {"merchant": "Spotify"},
+    "set_budget": {"items": [{"category": "Dining", "monthly": 5}]},
+    "manage_asset": {"action": "add", "name": "Truck", "kind": "vehicle", "value": 1},
+    "manage_goal": {"action": "add", "name": "Trip", "target": 10},
+    "schedule_c_draft": {"year": 2026},
+    "estimated_tax": {"year": 2026},
+    "review_writeoffs": {"year": 2026},
+    "set_scope": {"items": [{"merchant": "Kroger Gulfport", "scope": "personal"}]},
+    "log_trip": {"trip_date": "2026-10-01", "miles": 10, "purpose": "Client visit"},
+    "mileage_log": {"year": 2026},
+    "list_connections": {},
+}
+
+
+async def test_every_mcp_tool_except_sync_makes_no_network_calls(conn, cfg, monkeypatch):
+    from mcp import Client
+
+    from fiscl.server import build_server
+
+    load_demo(conn, cfg, today=TODAY)
+    conn.commit()
+
+    attempts: list[str] = []
+
+    def blocked(*a, **k):
+        attempts.append("network access attempted")  # tool wrappers swallow exceptions, so record instead
+        raise AssertionError("network access attempted")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    async with Client(build_server(cfg)) as c:
+        registered = {t.name for t in (await c.list_tools()).tools}
+        assert registered - {"sync_accounts"} == set(NO_NETWORK_TOOL_ARGS), "tool registry changed: update the table"
+        for name, args in NO_NETWORK_TOOL_ARGS.items():
+            await c.call_tool(name, args)  # bad-input tool errors are fine; only network use matters here
+            assert not attempts, name
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
 def test_private_permissions(cfg, conn):
     assert stat.S_IMODE(os.stat(cfg.home).st_mode) == 0o700

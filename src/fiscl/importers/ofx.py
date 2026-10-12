@@ -35,10 +35,15 @@ def _blocks(text: str, tag: str) -> list[str]:
     return re.findall(rf"<{tag}>(.*?)</{tag}>", text, re.IGNORECASE | re.DOTALL)
 
 
-def _ofx_date(value: str | None) -> str:
+def _ofx_date(value: str | None, field: str, index: int) -> str:
+    """Fixed-prose errors only: the field name and position help the user find the row; file values are not echoed."""
+    where = f"bad or missing {field} in OFX entry {index}"
     if not value or len(value) < 8 or not value[:8].isdigit():
-        raise OFXError(f"bad OFX date {value!r}")
-    return date(int(value[:4]), int(value[4:6]), int(value[6:8])).isoformat()
+        raise OFXError(where)
+    try:
+        return date(int(value[:4]), int(value[4:6]), int(value[6:8])).isoformat()
+    except ValueError as exc:
+        raise OFXError(where) from exc
 
 
 def parse_ofx(text: str) -> list[ParsedStatement]:
@@ -67,12 +72,12 @@ def parse_ofx(text: str) -> list[ParsedStatement]:
             currency = (_value(stmt, "CURDEF") or "USD").upper()
 
             txns: list[ParsedTxn] = []
-            for trn in _blocks(stmt, "STMTTRN"):
+            for n, trn in enumerate(_blocks(stmt, "STMTTRN"), start=1):
                 name = _value(trn, "NAME") or _value(trn, "PAYEE") or ""
                 memo = _value(trn, "MEMO")
                 txns.append(
                     ParsedTxn(
-                        posted_date=_ofx_date(_value(trn, "DTPOSTED")),
+                        posted_date=_ofx_date(_value(trn, "DTPOSTED"), "DTPOSTED", n),
                         amount=parse_amount(_value(trn, "TRNAMT") or "", currency),
                         description=clean_text(name or memo or "(no description)"),
                         memo=clean_text(memo) if memo and name else None,
@@ -81,10 +86,10 @@ def parse_ofx(text: str) -> list[ParsedStatement]:
                 )
 
             balances = []
-            for bal in _blocks(stmt, "LEDGERBAL"):
+            for b, bal in enumerate(_blocks(stmt, "LEDGERBAL"), start=1):
                 amt, as_of = _value(bal, "BALAMT"), _value(bal, "DTASOF")
                 if amt and as_of:
-                    balances.append((_ofx_date(as_of), parse_amount(amt, currency)))
+                    balances.append((_ofx_date(as_of, "DTASOF", b), parse_amount(amt, currency)))
 
             statements.append(
                 ParsedStatement(

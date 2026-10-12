@@ -222,6 +222,14 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE connections ADD COLUMN cursor TEXT;
     """,
+    # 6 — install-key fingerprint (non-secret sha256(key)[:16]) so doctor can tell when a DB moved without its key.
+    # Down: DROP TABLE meta;
+    """
+    CREATE TABLE meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """,
 ]
 
 # The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).

@@ -124,7 +124,9 @@ timezone = "America/Chicago"
 [guard]
 max_rows_default = 50
 max_rows_hard = 500
-redact_descriptions = false   # true = raw bank descriptions never leave the server
+# redact_descriptions = true withholds raw descriptions and memos. Normalized merchant names (which can include
+# P2P counterparty names) are still returned.
+redact_descriptions = false
 audit_log = true
 
 [transfers]
@@ -242,8 +244,8 @@ def _load_debts(raw: Any, currency: str) -> dict[str, DebtTerms]:
     if not isinstance(raw, dict):
         raise ConfigError('[debts] must be a table of [debts."Account name"] entries')
     out: dict[str, DebtTerms] = {}
-    for name, entry in raw.items():
-        where = f"[debts.{name!r}]"
+    for n, (name, entry) in enumerate(raw.items(), start=1):
+        where = f"[debts] entry {n}"  # by position: account names stay out of error text
         if not isinstance(entry, dict) or set(entry) - {"apr", "min_payment"}:
             raise ConfigError(f"{where} takes only apr and min_payment")
         if "apr" not in entry or "min_payment" not in entry:

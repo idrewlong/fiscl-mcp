@@ -230,6 +230,22 @@ def _write_ofx(path: Path, rows: list, opening: int, today: date) -> None:
     )
 
 
+def has_real_data(conn) -> bool:
+    """True when the database holds any account or transaction that the demo didn't create, so loading the demo
+    would mix synthetic rows into real financial data."""
+    names = (CHECKING, CARD, SAVINGS, BUSINESS)
+    marks = ",".join("?" * len(names))
+    if conn.execute(f"SELECT 1 FROM accounts WHERE name NOT IN ({marks}) LIMIT 1", names).fetchone():
+        return True
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM transactions t JOIN accounts a ON a.id = t.account_id "
+            f"WHERE a.name NOT IN ({marks}) LIMIT 1",
+            names,
+        ).fetchone()
+    )
+
+
 def load_demo(conn, cfg: Config, today: date | None = None) -> dict:
     today = today or date.today()
     checking, card, savings = generate(today)

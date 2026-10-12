@@ -69,7 +69,8 @@ async def test_tools_listed_with_annotations(demo):
         "category_trend",
     ):
         assert tools[name].annotations.read_only_hint is True, name
-    write_tools = (
+    destructive_tools = (
+        "apply_categories",
         "add_note",
         "tag_transactions",
         "split_transaction",
@@ -77,11 +78,18 @@ async def test_tools_listed_with_annotations(demo):
         "set_budget",
         "manage_asset",
         "manage_goal",
+        "set_scope",
     )
-    for name in write_tools:
+    for name in destructive_tools:
         a = tools[name].annotations
-        assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False, name
+        assert a.read_only_hint is False and a.destructive_hint is True and a.open_world_hint is False, name
+        assert a.idempotent_hint is False, name
         assert "dry_run" in tools[name].description, name
+    # log_trip only appends a row, so it stays a plain (non-destructive) local write.
+    a = tools["log_trip"].annotations
+    assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False
+    assert tools["sync_accounts"].annotations.open_world_hint is True
+    assert tools["sync_accounts"].annotations.destructive_hint is True
     assert tools["show_chart"].meta["ui"]["resourceUri"] == "ui://fiscl/chart.html"
 
 

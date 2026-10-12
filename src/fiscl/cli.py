@@ -15,6 +15,7 @@ from . import __version__
 from .config import DIR_MODE, FILE_MODE, ConfigError, ensure_layout, load_budgets, load_config
 from .db import add_account, backup, find_account, open_db
 from .guard import GuardError
+from .installkey import has_hashed_accounts, key_status
 
 
 def setup_logging(cfg, verbose: bool = False) -> None:
@@ -43,8 +44,29 @@ _CLOUD_SYNC_MARKERS = (
 )
 
 
-def cloud_sync_warning(path: Path) -> str | None:
-    lowered = str(path.expanduser().resolve()).lower().replace("\\", "/")
+_ICLOUD_DOCS = Path("Library/Mobile Documents/com~apple~CloudDocs")
+
+
+def _icloud_desktop_documents_marker(resolved: Path, home: Path | None) -> str | None:
+    """With iCloud "Desktop & Documents" on, ~/Desktop and ~/Documents sync even though their paths look local.
+    The sign is a Desktop (or Documents) folder inside iCloud Drive."""
+    home = (home or Path.home()).resolve()
+    for name in ("Desktop", "Documents"):
+        base = home / name
+        if (home / _ICLOUD_DOCS / name).exists() and (resolved == base or base in resolved.parents):
+            return f"iCloud Drive ({name} sync)"
+    return None
+
+
+def cloud_sync_warning(path: Path, home: Path | None = None) -> str | None:
+    resolved = path.expanduser().resolve()
+    icloud = _icloud_desktop_documents_marker(resolved, home)
+    if icloud:
+        return (
+            f"{path} looks like a cloud-synced folder ({icloud}); your financial data would leave this machine. "
+            "Move it with --home or FISCL_HOME to a local folder such as ~/fiscl."
+        )
+    lowered = str(resolved).lower().replace("\\", "/")
     for marker in _CLOUD_SYNC_MARKERS:
         if marker in lowered:
             return (
@@ -197,6 +219,11 @@ def cmd_sync(cfg, args) -> int:
         elif args.action == "forget":
             simplefin.forget()
             print("Removed the SimpleFIN credential from the keychain.")
+            print(
+                "This is local only: also revoke the access at the SimpleFIN Bridge. Transactions already synced "
+                "stay in your database and backups.",
+                file=sys.stderr,
+            )
     except simplefin.SyncError as exc:
         print(f"sync error: {exc}", file=sys.stderr)
         return 1
@@ -230,6 +257,12 @@ def _ensure_teller_credentials(cfg) -> None:
         )
         cert, key = teller.read_pem_files(input("Certificate file: ").strip(), input("Private key file: ").strip())
     teller.store_app_credentials(app_id or "", cert, key)
+    if need_cert:
+        print(
+            "The certificate and key are now in your OS keychain, but the files you downloaded are still where you "
+            "left them. Delete them (or keep them only in a password manager) so the private key isn't lying around.",
+            file=sys.stderr,
+        )
 
 
 def _ensure_plaid_credentials() -> None:
@@ -337,15 +370,18 @@ def cmd_doctor(cfg, args) -> int:
 
     problems, fixed = [], []
     warnings = [w for w in (cloud_sync_warning(cfg.home), disk_encryption_warning()) if w]
-    for path in [cfg.home, cfg.inbox, cfg.logs, cfg.backups, cfg.profiles_dir]:
-        if path.exists() and stat.S_IMODE(path.stat().st_mode) != DIR_MODE:
+    demo_dir = cfg.home / "demo"
+    data_dirs = [cfg.inbox, cfg.processed, cfg.failed, cfg.logs, cfg.backups, cfg.profiles_dir, demo_dir]
+    for path in [cfg.home, *data_dirs]:
+        if path.is_dir() and not path.is_symlink() and stat.S_IMODE(path.stat().st_mode) != DIR_MODE:
             os.chmod(path, DIR_MODE)
             fixed.append(f"permissions on {path}")
     private_files = [cfg.db_path, cfg.config_file, cfg.rules_file, cfg.budgets_file, cfg.home / ".install_key"]
-    private_files += [p for d in (cfg.logs, cfg.backups, cfg.profiles_dir) if d.exists() for p in d.iterdir()]
+    private_files += list(cfg.home.glob("*.bak"))  # config/rules/budgets backups from TOML edits
+    private_files += [p for d in data_dirs if d.is_dir() for p in d.iterdir()]  # incl. *.error.txt in inbox/failed
     private_files += [cfg.db_path.with_name(cfg.db_path.name + s) for s in ("-wal", "-shm")]
     for path in private_files:
-        if path.is_file() and stat.S_IMODE(path.stat().st_mode) != FILE_MODE:
+        if path.is_file() and not path.is_symlink() and stat.S_IMODE(path.stat().st_mode) != FILE_MODE:
             os.chmod(path, FILE_MODE)
             fixed.append(f"permissions on {path}")
     try:
@@ -359,6 +395,18 @@ def cmd_doctor(cfg, args) -> int:
             problems.append(f"database integrity: {integrity}")
         freshness = data_freshness(conn)
         failed = conn.execute("SELECT COUNT(*) FROM imports WHERE status = 'failed'").fetchone()[0]
+        key_state = key_status(conn, cfg)
+    if key_state == "mismatch":
+        warnings.append(
+            "The install key on this machine is not the one this database's account hashes were made with "
+            "(database moved or restored without its key). Re-importing would create duplicate accounts. "
+            "Restore the key with `fiscl key import PATH` from a `fiscl key export` backup."
+        )
+    elif key_state == "unverified":
+        warnings.append(
+            "No install-key fingerprint is recorded yet, so a missing key can't be detected. Run `fiscl key export "
+            "PATH` and keep that file safe, separate from your database backups."
+        )
     _print(
         {
             "home": str(cfg.home),
@@ -372,10 +420,55 @@ def cmd_doctor(cfg, args) -> int:
     return 1 if problems else 0
 
 
+def cmd_key(cfg, args) -> int:
+    """Move the per-install key (it makes account hashes stable) between machines or back from a restore.
+    The key is never printed; confirmation is typed with hidden input so it can't be scripted from a transcript."""
+    import getpass
+
+    from . import installkey
+
+    path = Path(args.path).expanduser()
+    if args.action == "export":
+        warning = cloud_sync_warning(path.parent)
+        if warning:
+            raise GuardError(f"won't write the key there: {warning}")
+        if (
+            getpass.getpass("Type 'export' to write your secret install key to that file (hidden): ").strip()
+            != "export"
+        ):
+            print("cancelled", file=sys.stderr)
+            return 1
+        installkey.export_key(cfg, path)
+        print(
+            f"Wrote the install key to {path} (owner-only). Keep it separate from your database backups, e.g. in a "
+            "password manager, and delete the file once it is stored.",
+            file=sys.stderr,
+        )
+        return 0
+    if getpass.getpass("Type 'import' to replace this install's key with the one in that file (hidden): ").strip() != (
+        "import"
+    ):
+        print("cancelled", file=sys.stderr)
+        return 1
+    with open_db(cfg) as conn:
+        hashed = has_hashed_accounts(conn)
+    installkey.import_key(cfg, path, force=args.force, hashed_accounts=hashed)
+    print("Imported the install key.", file=sys.stderr)
+    return 0
+
+
 def cmd_demo(cfg, args) -> int:
-    from .demo import load_demo
+    from .demo import has_real_data, load_demo
 
     with open_db(cfg) as conn:
+        if not args.force and has_real_data(conn):
+            print(
+                "error: this database already holds data that is not demo data; loading the demo would mix "
+                "synthetic rows into it. Use a throwaway home instead: fiscl --home /tmp/fiscl-demo demo "
+                "(or pass --force to load it here anyway).",
+                file=sys.stderr,
+            )
+            return 1
         _print(load_demo(conn, cfg))
     print("Demo data loaded. Try: fiscl serve, then ask your MCP client about spending.", file=sys.stderr)
     return 0
@@ -499,9 +592,20 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--vehicle")
     s.set_defaults(fn=cmd_tax)
 
+    s = sub.add_parser("key", help="export/import the install key that keeps account identity across machines")
+    a = s.add_subparsers(dest="action", required=True)
+    x = a.add_parser("export", help="write the key to a new owner-only file (never printed)")
+    x.add_argument("path")
+    x = a.add_parser("import", help="adopt a key exported from another machine or before a restore")
+    x.add_argument("path")
+    x.add_argument("--force", action="store_true", help="replace a different key even if accounts use the current one")
+    s.set_defaults(fn=cmd_key)
+
     sub.add_parser("backup", help="snapshot the database").set_defaults(fn=cmd_backup)
     sub.add_parser("doctor", help="check config, permissions, and data").set_defaults(fn=cmd_doctor)
-    sub.add_parser("demo", help="load synthetic demo data").set_defaults(fn=cmd_demo)
+    s = sub.add_parser("demo", help="load synthetic demo data (use a throwaway --home)")
+    s.add_argument("--force", action="store_true", help="load even if the database holds real, non-demo data")
+    s.set_defaults(fn=cmd_demo)
     s = sub.add_parser("audit", help="show recent tool calls")
     s.add_argument("-n", type=int, default=30)
     s.set_defaults(fn=cmd_audit)
@@ -511,10 +615,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)  # everything fiscl creates (db, WAL, logs, backups, exports) is private to this user
+    # Telemetry off by default: the MCP SDK's OpenTelemetry hooks must not export anything about financial tool
+    # calls. This runs before the server module is imported; a value the user set explicitly is respected.
+    os.environ.setdefault("OTEL_SDK_DISABLED", "true")
     args = build_parser().parse_args(argv)
     try:
         cfg = load_config(Path(args.home).expanduser() if args.home else None)
         ensure_layout(cfg)
+        # stderr only: stdout carries the MCP protocol for `serve`.
+        warning = cloud_sync_warning(cfg.home)
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
         setup_logging(cfg, args.verbose)
         return args.fn(cfg, args)
     except ConfigError as exc:

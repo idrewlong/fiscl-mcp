@@ -11,7 +11,7 @@ from pathlib import Path
 from ..config import Config, load_rules_raw
 from ..db import add_account, find_account
 from ..guard import clean_text
-from ..installkey import account_hash, legacy_account_hash
+from ..installkey import account_hash, has_hashed_accounts, legacy_account_hash, record_fingerprint
 from ..normalize import load_aliases, normalize_merchant
 from .csv_import import CSVImportError, parse_csv
 from .ofx import OFXError, looks_like_ofx, parse_ofx
@@ -60,7 +60,7 @@ def _dedupe_key(posted: str, amount: int, merchant: str, occurrence: int) -> str
 
 def parse_file(path: Path, cfg: Config, profile: str | None = None) -> list[ParsedStatement]:
     if path.suffix.lower() not in SUPPORTED:
-        raise ImportFailed(f"unsupported file type {path.suffix!r} (expected CSV, OFX, or QFX)")
+        raise ImportFailed("unsupported file type (expected CSV, OFX, or QFX)")
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ImportFailed("file is larger than 50 MB")
     text = path.read_text(encoding="utf-8-sig", errors="replace")
@@ -86,8 +86,13 @@ def _resolve_account(
     name = account_name or stmt.account_name
     if stmt.account_key:
         acct_hash = account_hash(cfg, stmt.account_key)
+        # Record which key made this database's hashes (first use wins) so `fiscl doctor` can notice a database that
+        # moved without its key. Only record when the key is known good: no hashed accounts yet, or one just matched.
+        if not has_hashed_accounts(conn):
+            record_fingerprint(conn, cfg)
         row = conn.execute("SELECT * FROM accounts WHERE acct_hash = ?", (acct_hash,)).fetchone()
         if row:
+            record_fingerprint(conn, cfg)
             return row
         # Accounts from before the keyed hash carry sha256(key): find them and upgrade in place, once.
         legacy = conn.execute(
@@ -95,6 +100,7 @@ def _resolve_account(
         ).fetchone()
         if legacy:
             conn.execute("UPDATE accounts SET acct_hash = ? WHERE id = ?", (acct_hash, legacy["id"]))
+            record_fingerprint(conn, cfg)
             return conn.execute("SELECT * FROM accounts WHERE id = ?", (legacy["id"],)).fetchone()
         new_name = name or f"{stmt.institution or 'Account'} ••{stmt.last4}"
         if name and (row := find_account(conn, name)):
@@ -120,7 +126,7 @@ def _resolve_account(
         raise ImportFailed("CSV files need an account: pass --account NAME or set `account` in the profile")
     row = find_account(conn, name)
     if row is None:
-        raise ImportFailed(f"no account named {name!r}. Create it with `fiscl accounts add`.")
+        raise ImportFailed("the account name given doesn't exist. Create it with `fiscl accounts add`.")
     return row
 
 
@@ -159,24 +165,25 @@ def _carry_edits(conn: sqlite3.Connection, pend: sqlite3.Row, new_id: int, amoun
     return carried, dropped
 
 
-def _update_in_place(conn: sqlite3.Connection, account_id: int, t, merchant: str) -> bool:
+def _update_in_place(conn: sqlite3.Connection, account_id: int, t, merchant: str) -> int | None:
     """Apply a provider-reported change to a row we already hold (matched by fitid). The user's category, note,
     tags, and scope stay; a split that no longer sums to the new amount is dropped rather than kept invalid.
-    Returns False when the row isn't there yet, so the caller inserts it."""
+    Returns None when the row isn't there yet (the caller inserts it), else 1 if a split was dropped, else 0."""
     row = conn.execute(
         "SELECT id, amount FROM transactions WHERE account_id = ? AND fitid = ?", (account_id, t.fitid)
     ).fetchone()
     if row is None:
-        return False
+        return None
+    dropped = 0
     if row["amount"] != t.amount:
-        conn.execute("DELETE FROM splits WHERE transaction_id = ?", (row["id"],))
+        dropped = 1 if conn.execute("DELETE FROM splits WHERE transaction_id = ?", (row["id"],)).rowcount else 0
     key = "f:" + t.fitid if not t.pending else None
     conn.execute(
         """UPDATE OR IGNORE transactions SET posted_date = ?, amount = ?, raw_description = ?, merchant = ?,
              memo = ?, is_pending = ?, dedupe_key = COALESCE(?, dedupe_key) WHERE id = ?""",
         (t.posted_date, t.amount, t.description, merchant, t.memo, int(t.pending), key, row["id"]),
     )
-    return True
+    return dropped
 
 
 def _insert_statement(
@@ -198,8 +205,9 @@ def _insert_statement(
             ident = (t.posted_date, t.amount, t.description.lower(), t.pending)
             occurrences[ident] = occurrences.get(ident, 0) + 1
             key = ("p:" if t.pending else "") + _dedupe_key(t.posted_date, t.amount, t.description, occurrences[ident])
-        if t.modified and t.fitid and _update_in_place(conn, account["id"], t, merchant):
+        if t.modified and t.fitid and (updated := _update_in_place(conn, account["id"], t, merchant)) is not None:
             skipped += 1
+            dropped += updated
             continue
         pend = None
         if not t.pending and t.replaces_fitid:

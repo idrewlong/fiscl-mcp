@@ -40,7 +40,11 @@ fiscl answers questions about the user's own finances from bank exports stored o
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+# LOCAL_WRITE is for purely additive writes. Anything that can remove or overwrite user data is LOCAL_DESTRUCTIVE,
+# so MCP clients can show the stricter approval prompt. The client's tool approval is the human gate; dry_run is only
+# a safety default.
 LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+LOCAL_DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
 DateArg = Annotated[str | None, Field(description="ISO date YYYY-MM-DD")]
 ScopeArg = Annotated[str, Field(description="all | personal | business")]
@@ -446,7 +450,7 @@ def build_server(cfg: Config) -> MCPServer:
     # --- local write tool -------------------------------------------------------------------
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Set categories for merchants or specific transactions in the local database. Each item is "
             "{merchant, category} or {transaction_ids, category}. dry_run defaults to true and returns the plan "
@@ -462,7 +466,7 @@ def build_server(cfg: Config) -> MCPServer:
         return run("apply_categories", analysis.apply_categories, items=items, create_rule=create_rule, dry_run=dry_run)
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Set or clear (note=null) a free-text note on one transaction, e.g. 'client dinner with Sam'. "
             "dry_run defaults to true and returns the old and new note without saving; show the user, then call "
@@ -477,7 +481,7 @@ def build_server(cfg: Config) -> MCPServer:
         return run("add_note", analysis.add_note, transaction_id=transaction_id, note=note, dry_run=dry_run)
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Add or remove tags (lowercased, up to 40 characters, up to 20 per list) on transactions. Each item is "
             "{merchant | transaction_ids, add: [tag], remove: [tag]}. Filter with query_transactions tag=. "
@@ -489,7 +493,7 @@ def build_server(cfg: Config) -> MCPServer:
         return run("tag_transactions", analysis.tag_transactions, items=items, dry_run=dry_run)
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Split one transaction into 2-20 parts with their own category (and optional scope personal|business and "
             "note), e.g. a $100 Amazon order into Groceries and Business: Supplies. Parts are in dollars with the "
@@ -511,7 +515,7 @@ def build_server(cfg: Config) -> MCPServer:
         )
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Hide a detected recurring item (a false positive, or a subscription the user cancelled) from "
             "detect_recurring and the forecast; it stays hidden when detection refreshes. Pass undo=true to bring it "
@@ -537,7 +541,7 @@ def build_server(cfg: Config) -> MCPServer:
         )
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Add, change, or remove monthly budgets in budgets.toml. Each item is {category, monthly (dollars; null "
             "removes the budget), rollover?}. Only the [[budget]] blocks are rewritten (a .bak is kept). dry_run "
@@ -549,7 +553,7 @@ def build_server(cfg: Config) -> MCPServer:
         return run("set_budget", analysis.set_budget, items=items, dry_run=dry_run)
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Add, update, or remove a manual asset or liability the bank data doesn't show (house, vehicle, "
             "equipment, investment, cash, a loan held elsewhere): {action: add|update|remove, name, kind: property|"
@@ -580,7 +584,7 @@ def build_server(cfg: Config) -> MCPServer:
         )
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Add, update, or archive a savings goal: {action: add|update|archive, name, target dollars, "
             "target_date, account (track that account's balance) or saved (manual dollars amount)}. Updating an "
@@ -652,7 +656,7 @@ def build_server(cfg: Config) -> MCPServer:
         return run("review_writeoffs", tax.review_writeoffs, year=year, limit=limit)
 
     @mcp.tool(
-        annotations=LOCAL_WRITE,
+        annotations=LOCAL_DESTRUCTIVE,
         description=(
             "Mark accounts ({account, scope: personal|business|mixed}), merchants ({merchant, scope}) or "
             "transactions ({transaction_ids, scope}) as business or personal. dry_run defaults to true; show the plan "
@@ -691,7 +695,8 @@ def build_server(cfg: Config) -> MCPServer:
         return run("mileage_log", tax.mileage_log, year=year, limit=limit)
 
     @mcp.tool(
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+        # Destructive: a sync can delete or overwrite local rows (Plaid removed/modified), so clients should ask first.
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
         description=(
             "Pull recent balances and transactions from the user's connected banks (SimpleFIN, Teller, Plaid; "
             "read-only, it cannot move money) into the local database. provider = simplefin | teller | plaid | all "
