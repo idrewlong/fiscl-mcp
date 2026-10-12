@@ -148,6 +148,7 @@ async def run(home: Path) -> Smoke:
             ("manage_goal", {"action": "add", "name": "Smoke goal", "target": 500}),
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business"}]}),
             ("log_trip", {"trip_date": "2026-01-02", "miles": 10, "purpose": "Smoke test client visit"}),
+            ("export_schedule_c", {"include_transactions": True}),
         ]
         for tool, args in writes:
             await s.call(c, tool, args, DRY)
@@ -180,6 +181,14 @@ async def run(home: Path) -> Smoke:
         ]
         for tool, args in bad:
             await s.call(c, tool, args, ERROR)
+
+        leftovers = list((home / "exports").iterdir())
+        s.check("a dry-run export wrote no files", not leftovers, leftovers)
+        # The one real write: an applied export lands only under exports/, as relative paths, and can be read back.
+        exported = await s.call(c, "export_schedule_c", {"dry_run": False, "include_transactions": True})
+        for f in exported["files"]:
+            ok = f["path"].startswith("exports/") and (home / f["path"]).is_file()
+            s.check(f"exported {f['path']} is relative and exists", ok, f)
 
         # Spot-check that the seeded demo cases surface.
         anomalies = await s.call(c, "find_anomalies", {"start_date": START, "sensitivity": "high"})

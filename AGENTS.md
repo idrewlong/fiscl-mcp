@@ -32,7 +32,7 @@ src/fiscl/
     edits.py         apply_categories, add_note, tag_transactions, split_transaction, dismiss_recurring
     planning.py      manage_asset, net_worth, afford, debt_payoff, manage_goal, goal_progress
     monitoring.py    find_anomalies, subscription_watchdog, refund_tracker
-  tax/             lines (constants, DISCLAIMER, line_for) · schedule_c · estimates · review (write-off questions) · edits (set_scope, log_trip, mileage_log)
+  tax/             lines (constants, DISCLAIMER, line_for) · schedule_c · estimates · review (write-off questions) · edits (set_scope, log_trip, mileage_log) · home_office (simplified method, line 30) · export (`export_schedule_c`, files only under `<data dir>/exports/`)
   common.py        shared service helpers: meta, with_meta, money_arg, account_id/find_account, scope/txn filters, year_bounds,
                    resolve_target, dry-run plan_result, bulk limits
   db.py            schema migrations, TXN_FROM join, SCOPE_SQL / SPENDING_FILTER / INCOME_FILTER, backups
@@ -60,6 +60,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - **SQL:** parameterized only. Use `FROM {TXN_FROM}` (the split-aware `txn_lines` view) for aggregates and `TXN_BASE_FROM` for row listings, balances, and edits so the `t`/`a`/`c` aliases that `SCOPE_SQL`, `SPENDING_FILTER`, and `INCOME_FILTER` need are present. Use `common.txn_filter(account_id, scope)` for optional account/scope restrictions.
 - **Bad input:** raise `GuardError("message safe to show the model", code="not_found|sum_mismatch|needs_terms|exists|invalid|sync_failed|key_missing")`; `run()` returns the redacted message to the model and logs only the code. Never put merchant names, amounts, or asset/goal/account names in error text; put names in structured response fields with fixed prose. Validate enums with `guard.choice`, dates with `guard.date_range`/`parse_month`, row caps with `guard.clamp_limit`.
 - **Local writes:** `dry_run=True` by default, return `common.plan_result(...)`, cap bulk edits with `check_items`/`check_bulk`, and annotate the tool `LOCAL_DESTRUCTIVE` if it can remove or overwrite user data, `LOCAL_WRITE` only if purely additive. `dry_run` is a safety default, not a gate; the human gate is the MCP client's tool approval. TOML edits go through `config.append_toml_block` (keeps `.bak` + provenance).
+- **Files fiscl writes for the user** (exports, digests) go only under fixed folders in the data dir, opened with `O_CREAT|O_EXCL|O_NOFOLLOW` at 0600; never accept a caller-supplied path. Escape CSV formula prefixes and Markdown in bank-derived text.
 - **Untrusted text:** bank descriptions go through `guard.clean_text` and are returned only as labeled data fields, never interpolated into prompts or instructions.
 - **Tax output** carries `DISCLAIMER` and frames findings as questions for the user and their preparer.
 - **Style:** ruff (line length 120, rules E/F/I/B/UP/SIM), `from __future__ import annotations`, module docstrings, sparse comments that explain why.

@@ -372,6 +372,10 @@ def cmd_doctor(cfg, args) -> int:
     warnings = [w for w in (cloud_sync_warning(cfg.home), disk_encryption_warning()) if w]
     demo_dir = cfg.home / "demo"
     data_dirs = [cfg.inbox, cfg.processed, cfg.failed, cfg.logs, cfg.backups, cfg.profiles_dir, demo_dir]
+    if cfg.exports.is_symlink():
+        problems.append("the exports folder is a symlink; remove it so fiscl can recreate a private folder")
+    else:
+        data_dirs.append(cfg.exports)  # schedule-c-*.csv/.md files: same sensitive data as the database
     for path in [cfg.home, *data_dirs]:
         if path.is_dir() and not path.is_symlink() and stat.S_IMODE(path.stat().st_mode) != DIR_MODE:
             os.chmod(path, DIR_MODE)

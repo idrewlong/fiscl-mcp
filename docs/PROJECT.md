@@ -440,8 +440,8 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [ ] Weekly digest (Markdown file or Claude scheduled task)
 
 **Tax**
-- [ ] Schedule C export (CSV/PDF)
-- [ ] Home office (simplified)
+- [x] Schedule C export (CSV + Markdown; PDF later)
+- [x] Home office (simplified)
 - [ ] 1099 reconciliation
 - [ ] Multiple businesses
 - [ ] State estimates

@@ -1,0 +1,342 @@
+"""export_schedule_c: a preparer-ready Schedule C package (summary CSV, Markdown, optional detail CSV).
+
+Files are only ever created inside `<data dir>/exports/`. No path, directory, or filename comes from the caller:
+names are built from fixed tokens, the year, a business id, and a timestamp. Everything bank-derived is escaped for
+CSV formula injection and Markdown before it is written.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import csv
+import io
+import os
+import re
+import stat
+from datetime import date, datetime
+from pathlib import Path
+
+from ..common import meta, year_bounds
+from ..config import DIR_MODE, FILE_MODE, Config
+from ..db import SCOPE_SQL, TXN_FROM
+from ..guard import GuardError, choice, clean_text
+from ..money import ZERO_DECIMAL
+from .lines import DISCLAIMER, SCHEDULE_C_LINES, line_for
+from .schedule_c import schedule_c_draft
+
+FORMATS = ("csv", "markdown")
+DEFAULT_BUSINESS_ID = 1  # becomes a real id when multiple businesses land (slice D)
+
+SUMMARY_COLUMNS = ("section", "line", "line_name", "category", "amount", "full_amount", "count", "note")
+SUMMARY_TEXT = {"line_name", "category", "note"}
+DETAIL_COLUMNS = (
+    "date",
+    "account",
+    "merchant",
+    "amount",
+    "category",
+    "line",
+    "scope",
+    "business",
+    "note",
+    "transaction_id",
+    "split_id",
+)
+DETAIL_TEXT = {"account", "merchant", "category", "line", "scope", "business", "note"}
+
+_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r", "＝", "＋", "－", "＠")
+FOOTER = "Prepared from your own records by fiscl; not tax advice."
+KEEP_NOTE = (
+    "These files hold the same sensitive data as your database. Delete exports you've sent to your preparer; "
+    "fiscl doesn't remove them."
+)
+NOT_PRIVATE = "the exports folder isn't a private directory inside your data folder; run fiscl doctor"
+
+
+# --- escaping ------------------------------------------------------------------------------
+
+
+def csv_cell(value: object) -> str:
+    """Bank-derived text for a CSV cell: cleaned, and defanged if a spreadsheet would read it as a formula."""
+    text = clean_text(None if value is None else str(value))
+    return "'" + text if text.startswith(_FORMULA_STARTS) else text
+
+
+_MD_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
+_MD_PUNCT = re.compile(r"[&<>\\`*_\[\](){}#|!~]")
+
+
+def md_text(value: object) -> str:
+    """Bank-derived text for Markdown: no raw HTML, no links or emphasis, one line."""
+    text = clean_text(None if value is None else str(value))
+    return _MD_PUNCT.sub(lambda m: _MD_ESCAPES.get(m.group(), "\\" + m.group()), text)
+
+
+def plain(minor: int, currency: str) -> str:
+    """Plain decimal string for a spreadsheet: no symbol, no grouping."""
+    if currency in ZERO_DECIMAL:
+        return str(int(minor))
+    whole, cents = divmod(abs(int(minor)), 100)
+    return f"{'-' if minor < 0 else ''}{whole}.{cents:02d}"
+
+
+# --- content -------------------------------------------------------------------------------
+
+
+def _freshness(draft: dict) -> str:
+    parts = [f"{f['account']}: {f['latest_transaction'] or 'no transactions'}" for f in draft["meta"]["data_freshness"]]
+    return "; ".join(parts) or "no accounts"
+
+
+def summary_rows(draft: dict, cur: str) -> list[dict]:
+    rows: list[dict] = []
+
+    def add(section, line="", line_name="", category="", amt="", full="", count="", note=""):
+        rows.append(
+            dict(
+                section=section,
+                line=line,
+                line_name=line_name,
+                category=category,
+                amount=amt,
+                full_amount=full,
+                count=count,
+                note=note,
+            )
+        )
+
+    def money(a: dict) -> str:
+        return plain(a["minor"], cur)
+
+    add("gross_receipts", "1", SCHEDULE_C_LINES["1"], amt=money(draft["gross_receipts"]))
+    for entry in draft["expenses_by_line"]:
+        line, name = entry["line"], entry["name"]
+        for cat in entry["categories"]:
+            add("category", line, name, cat["category"], money(cat["spent"]), count=cat["count"])
+        mileage = entry.get("standard_mileage")
+        if mileage:
+            note = f"{mileage['miles']} miles at {mileage['rate_cents']} cents per mile"
+            add("mileage", line, name, "Standard mileage", money(mileage["deduction"]), note=note)
+        full = money(entry["full_amount"]) if "full_amount" in entry else ""
+        note = "50% of business meals" if line == "24b" else ""
+        count = sum(c["count"] for c in entry["categories"])
+        add("line", line, name, amt=money(entry["amount"]), full=full, count=count, note=note)
+    add("total_expenses", "28", "Total expenses", amt=money(draft["total_expenses"]))
+    add("tentative_profit", "29", "Tentative profit", amt=money(draft["tentative_profit_before_home_office"]))
+    ho = draft["home_office"]
+    if ho:
+        note = f"Simplified method, {ho['allowable_square_feet']} sq ft at {ho['rate_per_sqft']['display']}"
+        if ho["limited_to_profit"]:
+            note += "; limited to business profit"
+        add("home_office", "30", "Expenses for business use of your home", amt=money(ho["line_30"]), note=note)
+    else:
+        add("home_office", "30", "Expenses for business use of your home", amt=plain(0, cur), note="not configured")
+    add("net_profit", "31", "Net profit", amt=money(draft["net_profit"]))
+    for u in draft["unmapped_business_spending"]:
+        add("unmapped", category=u["category"], amt=money(u["spent"]), count=u["count"], note="no Schedule C line")
+    add("disclaimer", note=DISCLAIMER)
+    add("data_through", note=_freshness(draft))
+    return rows
+
+
+def detail_rows(conn, cfg: Config, start: date, end: date) -> list[dict]:
+    redact = cfg.guard.redact_descriptions
+    found = conn.execute(
+        f"""SELECT t.posted_date, a.name AS account, t.merchant, t.amount, c.name AS category,
+                   c.schedule_c_line AS line, {SCOPE_SQL} AS scope, t.note, t.id AS txn_id, t.split_id
+            FROM {TXN_FROM}
+            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business'
+            ORDER BY t.posted_date, t.id, t.split_id""",
+        (start.isoformat(), end.isoformat()),
+    ).fetchall()
+    return [
+        {
+            "date": r["posted_date"],
+            "account": r["account"],
+            "merchant": "" if redact else r["merchant"],
+            "amount": plain(r["amount"], cfg.currency),
+            "category": r["category"] or "Uncategorized",
+            "line": line_for(r["category"], r["line"]) or "",
+            "scope": r["scope"],
+            "business": "",  # filled in once businesses exist (slice D)
+            "note": "" if redact else r["note"],
+            "transaction_id": r["txn_id"],
+            "split_id": r["split_id"] if r["split_id"] is not None else "",
+        }
+        for r in found
+    ]
+
+
+def to_csv(columns: tuple[str, ...], text_cols: set[str], rows: list[dict]) -> bytes:
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(columns)
+    for row in rows:
+        w.writerow([csv_cell(row[c]) if c in text_cols else row[c] for c in columns])
+    return buf.getvalue().encode("utf-8")
+
+
+def to_markdown(draft: dict, cur: str) -> bytes:
+    def money(a: dict) -> str:
+        return md_text(a["display"])
+
+    def table(head: tuple[str, ...], body: list[tuple]) -> list[str]:
+        out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+        out += ["| " + " | ".join(str(c) for c in row) + " |" for row in body]
+        return out + [""]
+
+    ho = draft["home_office"]
+    summary = [("1", md_text(SCHEDULE_C_LINES["1"]), money(draft["gross_receipts"]))]
+    summary += [(e["line"], md_text(e["name"]), money(e["amount"])) for e in draft["expenses_by_line"]]
+    summary += [
+        ("28", "Total expenses", money(draft["total_expenses"])),
+        ("29", "Tentative profit", money(draft["tentative_profit_before_home_office"])),
+        ("30", "Home office (simplified method)", money(ho["line_30"]) if ho else "not configured"),
+        ("31", "Net profit", money(draft["net_profit"])),
+    ]
+    lines = [
+        f"# Schedule C draft, {draft['tax_year']}",
+        "",
+        f"> {DISCLAIMER}",
+        "",
+        f"Data through: {md_text(_freshness(draft))}",
+        "",
+        "## Summary",
+        "",
+        *table(("Line", "Name", "Amount"), summary),
+        "## Expenses by category",
+        "",
+    ]
+    cats = []
+    for e in draft["expenses_by_line"]:
+        cats += [(e["line"], md_text(c["category"]), money(c["spent"]), c["count"]) for c in e["categories"]]
+        m = e.get("standard_mileage")
+        if m:
+            cats.append((e["line"], "Standard mileage", money(m["deduction"]), md_text(f"{m['miles']} miles")))
+    lines += table(("Line", "Category", "Amount", "Count"), cats)
+    if draft["unmapped_business_spending"]:
+        lines += ["## Unmapped business spending", ""]
+        lines += table(
+            ("Category", "Amount", "Count"),
+            [(md_text(u["category"]), money(u["spent"]), u["count"]) for u in draft["unmapped_business_spending"]],
+        )
+    lines += ["## Notes", ""]
+    lines += [f"- {md_text(n)}" for n in draft["notes"][1:]] + ["", FOOTER, ""]
+    return "\n".join(lines).encode("utf-8")
+
+
+# --- safe writing --------------------------------------------------------------------------
+
+
+def exports_dir(cfg: Config, create: bool) -> Path:
+    """The exports folder, verified to be a real private directory directly inside the data folder."""
+    d = cfg.exports
+    try:
+        st = os.lstat(d)
+    except FileNotFoundError:
+        if not create:
+            return d
+        d.mkdir(mode=DIR_MODE)
+        st = os.lstat(d)
+    uid_ok = not hasattr(os, "getuid") or st.st_uid == os.getuid()
+    real_dir = stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
+    if not (real_dir and uid_ok and d.resolve().parent == cfg.home.resolve()):
+        raise GuardError(NOT_PRIVATE, code="invalid")
+    if create and stat.S_IMODE(st.st_mode) != DIR_MODE:
+        os.chmod(d, DIR_MODE)
+    return d
+
+
+def write_all(directory: Path, files: list[tuple[str, bytes]]) -> None:
+    """Write every file or none: temp files opened O_EXCL|O_NOFOLLOW (0600), then renamed into place."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    made: list[Path] = []
+    exists = GuardError("an export with that name already exists; try again in a second", code="exists")
+    try:
+        for name, _ in files:
+            if os.path.lexists(directory / name):
+                raise exists
+        for name, data in files:
+            tmp = directory / (name + ".tmp")
+            try:
+                fd = os.open(tmp, flags, FILE_MODE)
+            except FileExistsError as exc:
+                raise exists from exc
+            made.append(tmp)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+        for name, _ in files:
+            os.replace(directory / (name + ".tmp"), directory / name)
+            made.remove(directory / (name + ".tmp"))
+            made.append(directory / name)
+    except BaseException:
+        for p in made:
+            with contextlib.suppress(OSError):
+                p.unlink()
+        raise
+
+
+# --- the tool ------------------------------------------------------------------------------
+
+
+def export_schedule_c(
+    conn,
+    cfg: Config,
+    year=None,
+    formats=None,
+    include_transactions=False,
+    dry_run=True,
+    today=None,
+    now=None,
+) -> dict:
+    """Plan (default) or write the Schedule C export files for `year`. Never overwrites, never leaves the data dir."""
+    today = today or date.today()
+    year, start, end = year_bounds(year, today)
+    if formats is None:
+        formats = list(FORMATS)
+    if not isinstance(formats, (list, tuple)) or not formats:
+        raise GuardError("formats must be a non-empty list: csv, markdown")
+    formats = [f for f in FORMATS if f in {choice(x, FORMATS, "formats") for x in formats}]
+    cur = cfg.currency
+    draft = schedule_c_draft(conn, cfg, year, today)
+    stem = f"schedule-c-{year}-b{DEFAULT_BUSINESS_ID}-{(now or datetime.now()).strftime('%Y%m%dT%H%M%S')}"
+
+    planned: list[tuple[str, str, bytes, int | None]] = []  # name, kind, content, rows
+    if "csv" in formats:
+        rows = summary_rows(draft, cur)
+        planned.append((f"{stem}.csv", "summary_csv", to_csv(SUMMARY_COLUMNS, SUMMARY_TEXT, rows), len(rows)))
+    if "markdown" in formats:
+        planned.append((f"{stem}.md", "markdown", to_markdown(draft, cur), None))
+    if include_transactions:
+        detail = detail_rows(conn, cfg, start, end)
+        planned.append((f"{stem}-detail.csv", "detail_csv", to_csv(DETAIL_COLUMNS, DETAIL_TEXT, detail), len(detail)))
+
+    directory = exports_dir(cfg, create=not dry_run)
+    if not dry_run:
+        write_all(directory, [(name, data) for name, _, data, _ in planned])
+
+    files = []
+    for name, kind, _, rows in planned:
+        entry = {"path": f"exports/{name}", "kind": kind}
+        if rows is not None:
+            entry["rows"] = rows
+        files.append(entry)
+    notes = [DISCLAIMER, KEEP_NOTE]
+    if include_transactions and cfg.guard.redact_descriptions:
+        notes.append("redact_descriptions is on, so the merchant and note columns in the detail CSV are empty.")
+    result = {
+        "dry_run": bool(dry_run),
+        "files": files,
+        "summary": {
+            "gross_receipts": draft["gross_receipts"],
+            "total_expenses": draft["total_expenses"],
+            "net_profit": draft["net_profit"],
+        },
+        "next_step": "Call again with dry_run=false to write these files." if dry_run else "Applied.",
+        "notes": notes,
+    }
+    if not dry_run:
+        result["written"] = True
+        result["data_dir_relative"] = True
+    result["meta"] = meta(conn, cfg, start, end, row_count=len(files))
+    return result

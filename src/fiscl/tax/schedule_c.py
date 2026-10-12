@@ -9,6 +9,7 @@ from ..common import meta, year_bounds
 from ..config import Config
 from ..db import SCOPE_SQL, SPENDING_FILTER, TXN_FROM
 from ..money import amount
+from .home_office import LIMIT_NOTE, METHOD_NOTE, home_office_deduction
 from .lines import DISCLAIMER, LINE_ORDER, SCHEDULE_C_LINES, line_for
 
 
@@ -104,16 +105,29 @@ def schedule_c_draft(conn, cfg: Config, year=None, today=None) -> dict:
             "Some business spending isn't mapped to a Schedule C line yet (see unmapped). Recategorize "
             "it into a 'Business: …' category so it lands on the right line."
         )
-    notes.append(
-        "Home office (line 30), depreciation details, inventory/COGS (Part III), and health "
-        "insurance are not computed here."
-    )
+    profit_before = gross - total_expenses
+    home_office = home_office_deduction(cfg, year, profit_before)
+    line_30 = home_office["line_30"]["minor"] if home_office else 0
+    if home_office:
+        notes.append(METHOD_NOTE)
+        if home_office["limited_to_profit"]:
+            notes.append(LIMIT_NOTE)
+    else:
+        notes.append(
+            f"No home office configured for {year}; add [tax.home_office.{year}] if you use part of your home "
+            "regularly and exclusively for business."
+        )
+    notes.append("Depreciation details, inventory/COGS (Part III), and health insurance are not computed here.")
+    net_profit = amount(profit_before - line_30, cur)
     return {
         "tax_year": year,
         "gross_receipts": amount(gross, cur),
         "expenses_by_line": ordered,
         "total_expenses": amount(total_expenses, cur),
-        "tentative_net_profit": amount(gross - total_expenses, cur),
+        "tentative_profit_before_home_office": amount(profit_before, cur),
+        "home_office": home_office,
+        "net_profit": net_profit,
+        "tentative_net_profit": net_profit,  # alias kept for existing callers
         "unmapped_business_spending": unmapped,
         "mileage": {
             **miles,

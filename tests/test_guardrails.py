@@ -85,6 +85,7 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "set_scope": {"items": [{"merchant": "Kroger Gulfport", "scope": "personal"}]},
     "log_trip": {"trip_date": "2026-10-01", "miles": 10, "purpose": "Client visit"},
     "mileage_log": {"year": 2026},
+    "export_schedule_c": {"year": 2026, "include_transactions": True},
     "list_connections": {},
 }
 

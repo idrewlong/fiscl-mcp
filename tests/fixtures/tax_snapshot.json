@@ -423,6 +423,7 @@
       "display": "$33,243.36",
       "minor": 3324336
     },
+    "home_office": null,
     "meta": {
       "currency": "USD",
       "data_freshness": [
@@ -459,13 +460,22 @@
       "rate_cents_per_mile": "72.5",
       "trips": 5
     },
+    "net_profit": {
+      "display": "$29,052.78",
+      "minor": 2905278
+    },
     "notes": [
       "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm.",
       "Line 24b shows 50% of business meals, the usual limit. Some meals are fully deductible or not deductible at all; confirm with your preparer.",
-      "Home office (line 30), depreciation details, inventory/COGS (Part III), and health insurance are not computed here."
+      "No home office configured for 2026; add [tax.home_office.2026] if you use part of your home regularly and exclusively for business.",
+      "Depreciation details, inventory/COGS (Part III), and health insurance are not computed here."
     ],
     "tax_year": 2026,
     "tentative_net_profit": {
+      "display": "$29,052.78",
+      "minor": 2905278
+    },
+    "tentative_profit_before_home_office": {
       "display": "$29,052.78",
       "minor": 2905278
     },

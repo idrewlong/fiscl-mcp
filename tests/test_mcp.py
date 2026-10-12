@@ -287,3 +287,31 @@ async def test_stdio_server_keeps_stdout_clean(demo):
         assert any(t.name == "forecast_cash" for t in tools.tools)
         r = await c.call_tool("list_accounts", {})
         assert not r.is_error
+
+
+async def test_export_schedule_c_annotations_and_dry_run_default(demo):
+    async with Client(build_server(demo)) as c:
+        tool = {t.name: t for t in (await c.list_tools()).tools}["export_schedule_c"]
+        a = tool.annotations
+        assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False
+        assert a.idempotent_hint is False
+        assert set(tool.input_schema["properties"]) == {"year", "formats", "include_transactions", "dry_run"}
+        r = await c.call_tool("export_schedule_c", {"year": 2026})
+        assert not r.is_error
+        assert r.structured_content["dry_run"] is True
+        assert [f["kind"] for f in r.structured_content["files"]] == ["summary_csv", "markdown"]
+        assert list(demo.exports.iterdir()) == []
+        for bad in ({"year": 1999}, {"formats": ["pdf"]}, {"year": "../../x"}):
+            r = await c.call_tool("export_schedule_c", bad)
+            assert r.is_error
+        assert list(demo.exports.iterdir()) == []
+
+
+async def test_export_schedule_c_applies_and_returns_relative_paths(demo):
+    async with Client(build_server(demo)) as c:
+        r = await c.call_tool("export_schedule_c", {"year": 2026, "dry_run": False})
+        assert not r.is_error and r.structured_content["written"] is True
+        for f in r.structured_content["files"]:
+            assert f["path"].startswith("exports/") and not f["path"].startswith("/")
+            assert (demo.home / f["path"]).is_file()
+        assert str(demo.home) not in json.dumps(r.structured_content)

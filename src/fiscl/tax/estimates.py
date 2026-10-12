@@ -9,6 +9,7 @@ from ..common import meta, year_bounds
 from ..config import Config
 from ..guard import GuardError
 from ..money import amount, pct
+from .home_office import home_office_deduction
 from .lines import DISCLAIMER
 from .schedule_c import schedule_c_draft
 
@@ -24,11 +25,16 @@ def estimated_tax(conn, cfg: Config, year=None, income_tax_rate_pct=None, w2_wag
     year, start, end = year_bounds(year, today)
     cur = cfg.currency
     draft = schedule_c_draft(conn, cfg, year, today)
-    ytd_profit = draft["tentative_net_profit"]["minor"]
+    ytd_profit = draft["net_profit"]["minor"]
+    before = draft["tentative_profit_before_home_office"]["minor"]
     if year == today.year:
         elapsed = (today - start).days + 1
         days_in_year = (end - start).days + 1
-        projected = ytd_profit * days_in_year // elapsed if elapsed else ytd_profit
+        projected = before * days_in_year // elapsed if elapsed else before
+        # The home office deduction is an annual figure: subtract it once from the annualized profit rather
+        # than annualizing a year-to-date profit that already had the full-year amount taken out.
+        ho = home_office_deduction(cfg, year, projected)
+        projected -= ho["line_30"]["minor"] if ho else 0
     else:
         projected = ytd_profit
 

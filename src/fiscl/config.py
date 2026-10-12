@@ -37,12 +37,21 @@ DEFAULT_MILEAGE_CENTS = {2024: "67", 2025: "70", 2026: "72.5"}
 DEFAULT_SS_WAGE_BASE = {2024: 168600, 2025: 176100, 2026: 184500}
 
 
+@dataclass(frozen=True)
+class HomeOffice:
+    """Simplified-method home office for one tax year, entered under [tax.home_office.YYYY]."""
+
+    square_feet: int  # 1-300, regular and exclusive business use
+    months_used: int = 12  # 1-12; months with business use, averaged into the allowable area
+
+
 @dataclass
 class TaxConfig:
     mileage_cents: dict[int, str] = field(default_factory=lambda: dict(DEFAULT_MILEAGE_CENTS))
     ss_wage_base: dict[int, int] = field(default_factory=lambda: dict(DEFAULT_SS_WAGE_BASE))
     # Optional: your own planning rate for income tax on business profit, e.g. 22.
     income_tax_rate_pct: str | None = None
+    home_office: dict[int, HomeOffice] = field(default_factory=dict)
 
 
 @dataclass
@@ -96,6 +105,10 @@ class Config:
         return self.home / "backups"
 
     @property
+    def exports(self) -> Path:
+        return self.home / "exports"
+
+    @property
     def profiles_dir(self) -> Path:
         return self.home / "profiles"
 
@@ -146,6 +159,11 @@ amount_tolerance_pct = 15
 # 2027 = "75"
 # [tax.ss_wage_base]
 # 2027 = 190000
+
+# Home office, simplified method ($5 per sq ft, at most 300 sq ft), per tax year. Shows up on Schedule C line 30.
+# [tax.home_office.2026]
+# square_feet = 200          # 1-300, used regularly and exclusively for business
+# months_used = 12           # 1-12 (default 12); months of business use, averaged into the area
 
 # Optional: interest rates and minimums for debt_payoff (bank exports don't carry them).
 # Key = the account name in fiscl. apr is a percent, min_payment is dollars.
@@ -210,7 +228,7 @@ def ensure_layout(cfg: Config) -> None:
     if home == Path.home().resolve() or home == Path(home.anchor):
         # We chmod the data dir to 0700 and fill it with files; never do that to $HOME or a filesystem root.
         raise ConfigError(f"{cfg.home} can't be the fiscl data directory; use a dedicated folder like ~/fiscl")
-    for d in (cfg.home, cfg.inbox, cfg.processed, cfg.failed, cfg.logs, cfg.backups, cfg.profiles_dir):
+    for d in (cfg.home, cfg.inbox, cfg.processed, cfg.failed, cfg.logs, cfg.backups, cfg.profiles_dir, cfg.exports):
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, DIR_MODE)
     for path, text in (
@@ -237,6 +255,26 @@ def _int(section: dict, key: str, default: int, lo: int, hi: int, where: str) ->
     if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
         raise ConfigError(f"{where}.{key} must be an integer between {lo} and {hi}")
     return value
+
+
+def _load_home_office(raw: Any) -> dict[int, HomeOffice]:
+    """Parse [tax.home_office.YYYY] tables. Errors say which year, never anything else."""
+    if not isinstance(raw, dict):
+        raise ConfigError("[tax.home_office] must be a table of [tax.home_office.YYYY] entries")
+    out: dict[int, HomeOffice] = {}
+    for key, entry in raw.items():
+        if not (isinstance(key, str) and key.isascii() and key.isdigit() and 2000 <= int(key) <= 2100):
+            raise ConfigError("[tax.home_office] years must be 4-digit years between 2000 and 2100")
+        where = f"tax.home_office.{int(key)}"
+        if not isinstance(entry, dict) or set(entry) - {"square_feet", "months_used"}:
+            raise ConfigError(f"[{where}] takes only square_feet and months_used")
+        if "square_feet" not in entry:
+            raise ConfigError(f"[{where}] needs square_feet (1 to 300)")
+        out[int(key)] = HomeOffice(
+            square_feet=_int(entry, "square_feet", 0, 1, 300, where),
+            months_used=_int(entry, "months_used", 12, 1, 12, where),
+        )
+    return out
 
 
 def _load_debts(raw: Any, currency: str) -> dict[str, DebtTerms]:
@@ -290,6 +328,7 @@ def load_config(home: Path | None = None) -> Config:
             if not 0 <= rate <= 60:
                 raise ConfigError("tax.income_tax_rate_pct must be between 0 and 60")
             tax.income_tax_rate_pct = str(rate)
+        tax.home_office = _load_home_office(tax_raw.get("home_office", {}))
     except (ValueError, InvalidOperation) as exc:
         raise ConfigError(f"[tax] section: {exc}") from exc
     teller_env = (raw.get("connectors", {}).get("teller", {}) or {}).get("environment", "development")

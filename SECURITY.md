@@ -34,6 +34,10 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 - **Keychain scope.** On macOS the keychain items are readable by code running as you with the same interpreter, so this protects against other users and a stolen disk, not malware already running as you.
 - **Audit trail.** `fiscl audit` shows every tool call with sanitized arguments; merchant names, descriptions, and amounts are never logged, and failed calls log only a stable error code (such as `not_found`), never the error text.
 
+## Exports
+
+`export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions.
+
 ## Recommendations for users
 
 1. Turn on full-disk encryption.
