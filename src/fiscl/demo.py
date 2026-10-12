@@ -142,6 +142,69 @@ def generate(today: date, seed: int = 7) -> tuple[list, list, list]:
     return sorted(checking), sorted(card), sorted(savings)
 
 
+AMAZON_SPLIT_DESC = "AMZN MKTP US*7Q2XY81"
+NORDSTROM_AMOUNT = -12000
+
+
+def generate_extras(today: date) -> tuple[list, list]:
+    """Seeded cases for the v2 tools, as (checking, card) rows. Dates are relative to today.
+
+    Descriptions are chosen so normalize_merchant gives one merchant per story (STREAMLY.COM for the trial and
+    the paid charges, the same B&H string for the small and the big purchase).
+    """
+    d = timedelta
+    bh = "B&H PHOTO 800-606-6969"
+    checking = [(today - d(days=12), -3400, "OVERDRAFT FEE")]
+    card = [
+        (today - d(days=5), -8417, "WHOLEFDS MKT"),  # same charge twice
+        (today - d(days=4), -8417, "WHOLEFDS MKT"),
+        (today - d(days=150), -4500, bh),  # small purchases, then a spike
+        (today - d(days=100), -3200, bh),
+        (today - d(days=60), -5800, bh),
+        (today - d(days=8), -124900, bh),
+        (today - d(days=40), -100, "STREAMLY.COM"),  # trial, then paid
+        (today - d(days=26), -1599, "STREAMLY.COM"),
+        (today - d(days=2), -1599, "STREAMLY.COM"),
+        (today - d(days=6), -38500, "LUXE ESTATE SALES"),  # new merchant
+        (today - d(days=25), -4250, "TARGET"),  # refund received
+        (today - d(days=10), 4250, "TARGET"),
+        (today - d(days=35), NORDSTROM_AMOUNT, "NORDSTROM"),  # refund expected (tagged below)
+        (today - d(days=9), -10000, AMAZON_SPLIT_DESC),  # split below
+    ]
+    return checking, card
+
+
+def _seed_extras(conn, today: date) -> None:
+    """Rows that live outside the bank files (tags, splits, a manual asset, a goal). Safe to run repeatedly."""
+    from .db import get_or_create_category
+
+    conn.execute(
+        """INSERT OR IGNORE INTO tags (transaction_id, tag)
+           SELECT id, 'refund-pending' FROM transactions WHERE merchant = 'Nordstrom' AND amount = ?""",
+        (NORDSTROM_AMOUNT,),
+    )
+    parent = conn.execute("SELECT id FROM transactions WHERE raw_description = ?", (AMAZON_SPLIT_DESC,)).fetchone()
+    if parent and not conn.execute("SELECT 1 FROM splits WHERE transaction_id = ?", (parent["id"],)).fetchone():
+        for minor, category, scope, note in (
+            (-6000, "Shopping", None, None),
+            (-4000, "Business: Supplies", "business", "printer paper and ink"),
+        ):
+            conn.execute(
+                "INSERT INTO splits (transaction_id, amount, category_id, scope, note) VALUES (?, ?, ?, ?, ?)",
+                (parent["id"], minor, get_or_create_category(conn, category), scope, note),
+            )
+    conn.execute(
+        "INSERT OR IGNORE INTO manual_assets (name, kind, value, as_of, note) VALUES (?, 'vehicle', ?, ?, ?)",
+        ("Pickup truck", 1850000, today.isoformat(), "Estimated resale value"),
+    )
+    savings = find_account(conn, SAVINGS)
+    conn.execute(
+        """INSERT OR IGNORE INTO goals (name, target, target_date, account_id, saved, created_at)
+           VALUES ('Emergency fund', 1000000, ?, ?, 0, ?)""",
+        ((today + timedelta(days=180)).isoformat(), savings["id"], today.isoformat()),
+    )
+
+
 def _write_csv(path: Path, rows: list) -> None:
     lines = ["Date,Description,Amount"]
     for dt, amt, desc in sorted(rows, reverse=True):
@@ -170,6 +233,8 @@ def _write_ofx(path: Path, rows: list, opening: int, today: date) -> None:
 def load_demo(conn, cfg: Config, today: date | None = None) -> dict:
     today = today or date.today()
     checking, card, savings = generate(today)
+    extra_checking, extra_card = generate_extras(today)
+    checking, card = sorted(checking + extra_checking), sorted(card + extra_card)
     demo_dir = cfg.home / "demo"
     demo_dir.mkdir(exist_ok=True)
     for name, type_, scope in (
@@ -222,6 +287,7 @@ def load_demo(conn, cfg: Config, today: date | None = None) -> dict:
     )
     if "Business: Software & Subscriptions" not in cfg.rules_file.read_text(encoding="utf-8"):
         append_toml_block(cfg.rules_file, DEMO_RULES, tool="fiscl demo")
+    _seed_extras(conn, today)
     post = post_import(conn, cfg, today=today)
     if not load_budgets(cfg):
         append_toml_block(

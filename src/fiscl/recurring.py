@@ -20,6 +20,8 @@ CADENCES = [
 ]
 BILL_CATEGORIES = {"housing", "utilities", "insurance", "taxes", "fees & interest"}
 MIN_CONFIDENCE = 0.6
+ANNUAL_PAIR_TOLERANCE_PCT = 5  # two yearly charges must match this closely to count as a subscription
+LOOKBACK_MONTHS = 39  # three annual charges plus slack
 
 
 def add_months(d: date, months: int) -> date:
@@ -53,13 +55,21 @@ def detect(series: list[tuple[date, int]], min_occurrences: int, tolerance_pct: 
     for d, a in series:
         by_day[d] += a
     points = sorted(by_day.items())
-    if len(points) < min_occurrences:
+    # A yearly charge can't show three points in a short window, so two are enough for an annual cadence
+    # as long as the amounts match closely (checked below).
+    if len(points) < min(min_occurrences, 2):
         return None
     intervals = [(b[0] - a[0]).days for a, b in zip(points, points[1:], strict=False)]
     classified = _classify(intervals)
     if classified is None:
         return None
     cadence, regularity = classified
+    if len(points) < min_occurrences:
+        if cadence != "annual":
+            return None
+        first, second = points[0][1], points[1][1]
+        if abs(first - second) > max(first * ANNUAL_PAIR_TOLERANCE_PCT // 100, 100):
+            return None
 
     amounts = [a for _, a in points]
     history = amounts[:-1]
@@ -96,7 +106,7 @@ def detect(series: list[tuple[date, int]], min_occurrences: int, tolerance_pct: 
 
 def refresh_recurring(conn: sqlite3.Connection, cfg: Config, today: date | None = None) -> int:
     today = today or date.today()
-    since = add_months(today, -18).isoformat()
+    since = add_months(today, -LOOKBACK_MONTHS).isoformat()
     rows = conn.execute(
         """SELECT t.merchant, t.account_id, t.posted_date, t.amount, c.name AS category
            FROM transactions t LEFT JOIN categories c ON c.id = t.category_id

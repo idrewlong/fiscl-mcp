@@ -188,6 +188,7 @@ async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, 
             conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0],
         )
 
+    base = snapshot()  # the demo seeds one asset and one goal
     calls = {
         "manage_asset": {"action": "add", "name": "Truck", "kind": "vehicle", "value": 18000},
         "manage_goal": {"action": "add", "name": "Trip", "target": 3000, "saved": 100},
@@ -198,7 +199,7 @@ async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, 
             assert not r.is_error, (name, r.content)
             assert r.structured_content["dry_run"] is True and r.structured_content["changes"], name
             assert "data_freshness" in r.structured_content["meta"], name
-        assert snapshot() == (0, 0)
+        assert snapshot() == base
         for name, args in [
             ("manage_asset", {"action": "add", "name": "X", "kind": "boat", "value": 1}),
             ("manage_goal", {"action": "add", "name": "X", "target": -1}),
@@ -214,7 +215,7 @@ async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, 
         for name, args in calls.items():
             r = await c.call_tool(name, {**args, "dry_run": False})
             assert r.structured_content["dry_run"] is False
-        assert snapshot() == (1, 1)
+        assert snapshot() == (base[0] + 1, base[1] + 1)
         nw = (await c.call_tool("net_worth", {})).structured_content
         assert any(a["name"] == "Truck" for a in nw["assets"])
         af = (await c.call_tool("afford", {"amount": 2000})).structured_content
@@ -241,6 +242,31 @@ async def test_chart_tool_returns_renderable_spec(demo):
         assert chart["type"] == "hbar" and len(chart["labels"]) == len(chart["series"][0]["values"])
         res = await c.read_resource("ui://fiscl/chart.html")
         assert "ui/initialize" in res.contents[0].text
+
+
+async def test_new_chart_kinds_and_category_arg(demo):
+    async with Client(build_server(demo)) as c:
+        nw = (await c.call_tool("show_chart", {"kind": "net_worth"})).structured_content["chart"]
+        assert nw["labels"] == ["Assets", "Liabilities", "Net worth"]
+        ct = await c.call_tool("show_chart", {"kind": "category_trend", "category": "Groceries"})
+        chart = ct.structured_content["chart"]
+        assert chart["reference"]["name"] == "3-month median" and len(chart["labels"]) == 12
+        assert (await c.call_tool("show_chart", {"kind": "category_trend"})).is_error  # category is required
+        assert (await c.call_tool("show_chart", {"kind": "category_trend", "category": "Nope"})).is_error
+
+
+async def test_goal_and_recurring_resources_and_prompt(demo):
+    async with Client(build_server(demo)) as c:
+        uris = {str(r.uri) for r in (await c.list_resources()).resources}
+        assert {"fiscl://goals", "fiscl://recurring"} <= uris
+        goals = json.loads((await c.read_resource("fiscl://goals")).contents[0].text)
+        assert goals["goals"][0]["name"] == "Emergency fund"
+        recurring = json.loads((await c.read_resource("fiscl://recurring")).contents[0].text)
+        assert "meta" in recurring
+        prompts = {p.name for p in (await c.list_prompts()).prompts}
+        assert "goal_check_in" in prompts
+        text = (await c.get_prompt("goal_check_in")).messages[0].content.text
+        assert "goal_progress" in text and "net_worth" in text and "afford" in text and "not advice" in text
 
 
 async def test_stdio_server_keeps_stdout_clean(demo):

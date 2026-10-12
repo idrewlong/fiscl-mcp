@@ -78,7 +78,9 @@ def build_server(cfg: Config) -> MCPServer:
         annotations=READ_ONLY,
         description=(
             "Show an interactive chart in the conversation. kind: spending_by_category | spending_by_month | "
-            "cash_flow | forecast | budget. Clients without chart support receive the same numbers as data."
+            "cash_flow | forecast | budget | net_worth (assets vs liabilities) | category_trend (monthly bars "
+            "with the 3-month median; needs `category`). Clients without chart support receive the same numbers "
+            "as data."
         ),
     )
     def show_chart(
@@ -90,9 +92,18 @@ def build_server(cfg: Config) -> MCPServer:
         scope: Annotated[
             str | None, Field(description="all | personal | business (forecast defaults to personal)")
         ] = None,
+        category: Annotated[str | None, Field(description="Required for kind=category_trend")] = None,
     ) -> dict[str, Any]:
         return run(
-            "show_chart", build_chart, kind=kind, from_=start_date, to=end_date, month=month, days=days, scope=scope
+            "show_chart",
+            build_chart,
+            kind=kind,
+            from_=start_date,
+            to=end_date,
+            month=month,
+            days=days,
+            scope=scope,
+            category=category,
         )
 
     apps.add_html_resource(
@@ -734,6 +745,16 @@ def build_server(cfg: Config) -> MCPServer:
             [{"category": b.category, "monthly_minor": b.monthly, "rollover": b.rollover} for b in load_budgets(cfg)]
         )
 
+    @mcp.resource("fiscl://goals", mime_type="application/json", description="Savings goals and progress")
+    def goals_resource() -> str:
+        with open_db(cfg) as conn:
+            return _json(analysis.goal_progress(conn, cfg))
+
+    @mcp.resource("fiscl://recurring", mime_type="application/json", description="Detected recurring items")
+    def recurring_resource() -> str:
+        with open_db(cfg) as conn:
+            return _json(analysis.list_recurring(conn, cfg))
+
     @mcp.resource(
         "fiscl://summary/current-month",
         mime_type="application/json",
@@ -801,6 +822,20 @@ def build_server(cfg: Config) -> MCPServer:
             f"Use fiscl forecast_cash with days={days} and then show_chart kind=forecast. Tell me the lowest "
             "projected balance and when, whether anything goes negative, the next income date, the "
             "safe-to-spend amount, and the five largest upcoming bills. State the forecast's assumptions."
+        )
+
+    @mcp.prompt(description="Savings goals check-in: progress, pace, net worth, and what a goal would need")
+    def goal_check_in() -> str:
+        return (
+            "Do a savings goals check-in with fiscl.\n"
+            "1. goal_progress for all goals: current amount, percent, required monthly amount, and whether the "
+            "last-90-days pace is on track.\n"
+            "2. net_worth for context, noting any stale or missing balances in its assumptions.\n"
+            "3. For any goal that is behind pace, call afford with the goal's required monthly amount and "
+            "recurring_monthly=true to show how that would change the lowest projected balance and safe-to-spend.\n"
+            "Describe what the numbers show as observations, not advice: don't tell me what I should do, and don't "
+            "recommend cutting specific spending. Quote fiscl's numbers, relay each tool's assumptions, and offer "
+            "to look closer at anything I ask about."
         )
 
     @mcp.prompt(description="Business tax check-up: Schedule C draft, open write-off questions, quarterly estimate")

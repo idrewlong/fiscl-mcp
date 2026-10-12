@@ -15,11 +15,19 @@ from .guard import GuardError, choice
 from .recurring import add_months
 
 CHART_URI = "ui://fiscl/chart.html"
-KINDS = ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget")
+KINDS = (
+    "spending_by_category",
+    "spending_by_month",
+    "cash_flow",
+    "forecast",
+    "budget",
+    "net_worth",
+    "category_trend",
+)
 
 
 def build_chart(
-    conn, cfg, kind: str, from_=None, to=None, month=None, days: int = 30, scope=None, today=None
+    conn, cfg, kind: str, from_=None, to=None, month=None, days: int = 30, scope=None, category=None, today=None
 ) -> dict[str, Any]:
     choice(kind, KINDS, "kind")
     cur = cfg.currency
@@ -96,6 +104,52 @@ def build_chart(
             f"Lowest projected balance {data['lowest_balance']['amount']['display']} on "
             f"{data['lowest_balance']['date']}; ends at {data['projected_end_balance']['display']}."
         )
+    elif kind == "net_worth":
+        data = analysis.net_worth(conn, cfg, today=today)
+        net = data["net_worth"]["minor"]
+        change = next((c for c in data["change_vs"] if c["days"] == 30), None)
+        subtitle = f"as of {data['as_of']} · net worth {data['net_worth']['display']}"
+        if change:
+            subtitle += f" · accounts {change['change']['display']} vs 30 days ago"
+        chart = {
+            "type": "bar",
+            "title": "Net worth",
+            "subtitle": subtitle,
+            "labels": ["Assets", "Liabilities", "Net worth"],
+            "series": [
+                {
+                    "name": "Amount",
+                    "values": [data["total_assets"]["minor"], data["total_liabilities"]["minor"], net],
+                }
+            ],
+        }
+        summary = (
+            f"Net worth {data['net_worth']['display']}: assets {data['total_assets']['display']}, "
+            f"liabilities {data['total_liabilities']['display']}."
+        )
+        if data["assets"]:
+            summary += " Largest assets: " + ", ".join(
+                f"{a['name']} {a['amount']['display']}" for a in data["assets"][:3]
+            )
+    elif kind == "category_trend":
+        data = analysis.category_trend(conn, cfg, category=category, scope=scope or "all", today=today)
+        months = data["months"]
+        median = data["trend"]["median_last_3_complete_months"]
+        chart = {
+            "type": "bar",
+            "title": f"{data['category']} by month",
+            "subtitle": f"trend {data['trend']['direction']} · last month partial"
+            + (f" · 3-month median {median['display']}" if median else ""),
+            "labels": [m["month"] for m in months],
+            "series": [{"name": "Spent", "values": [m["spent"]["minor"] for m in months]}],
+        }
+        if median:
+            chart["reference"] = {"name": "3-month median", "value": median["minor"]}
+        summary = f"{data['category']}: trend {data['trend']['direction']}, " + ", ".join(
+            f"{m['month']} {m['spent']['display']}" for m in months[-6:]
+        )
+        if data["budget"]:
+            summary += f"; budget {data['budget']['monthly']['display']}/month"
     else:  # budget
         data = analysis.budget_status(conn, cfg, month=month, today=today)
         lines = data["budgets"]
@@ -115,7 +169,7 @@ def build_chart(
         summary = "; ".join(
             f"{b['category']}: {b['spent']['display']} of {b['budget']['display']} ({b['status']})" for b in lines
         )
-    if scope and scope != "all" and kind != "budget":
+    if scope and scope != "all" and kind not in ("budget", "net_worth"):
         chart["title"] += f" ({scope})"
     chart["currency"] = cur
     return {"chart": chart, "summary": summary, "meta": data["meta"]}
@@ -196,6 +250,8 @@ border-radius:4px;opacity:0;transition:opacity .1s}#empty{color:var(--muted);fon
   function vchart(c, series, labels) {
     const W = 640, H = 260, padL = 58, padR = 10, padT = 10, padB = 34;
     const all = series.flatMap(s => s.values);
+    const ref = c.reference && Number.isFinite(c.reference.value) ? c.reference : null;
+    if (ref && c.type !== 'line') all.push(ref.value);
     let lo, hi;
     if (c.type === 'line') {
       // Fit the data so small movements are visible; include zero only if the data gets close to it.
@@ -236,6 +292,10 @@ border-radius:4px;opacity:0;transition:opacity .1s}#empty{color:var(--muted);fon
         s += `<rect x="${x}" y="${top}" width="${bw - 1}" height="${Math.max(bot - top, 1)}" rx="1.5" fill="${colors[k]}"
           data-tip="${esc(lab)} · ${esc(ser.name)}: ${esc(money(v))}"/>`;
       }));
+      if (ref) {  // dashed reference line (e.g. a 3-month median); the tooltip is text like every other
+        s += `<line x1="${padL}" x2="${W - padR}" y1="${y(ref.value)}" y2="${y(ref.value)}" stroke="var(--s2)" stroke-width="2" stroke-dasharray="5 4"
+          data-tip="${esc(ref.name || 'Reference')}: ${esc(money(ref.value))}"/>`;
+      }
     }
     return s + '</svg>';
   }

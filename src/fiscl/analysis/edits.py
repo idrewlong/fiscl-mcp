@@ -17,6 +17,7 @@ from ..common import (
     plan_result,
     resolve_target,
     target_of,
+    without_split_parents,
 )
 from ..config import Config
 from ..db import get_category_id, get_or_create_category
@@ -38,10 +39,12 @@ def apply_categories(conn, cfg: Config, items: list[dict], create_rule=False, dr
         if category.lower() == "transfers":
             raise GuardError(f"item {i}: transfers are matched automatically, not assigned")
         merchant, ids, rows = resolve_target(conn, item, i)
+        rows, skipped = without_split_parents(rows)
         total_rows += len(rows)
         plan.append(
             {
                 "target": target_of(merchant, ids),
+                **skipped,
                 "category": category,
                 "creates_category": get_category_id(conn, category) is None,
                 "matched_transactions": len(rows),
@@ -61,7 +64,8 @@ def apply_categories(conn, cfg: Config, items: list[dict], create_rule=False, dr
             )
             if p["creates_rule"]:
                 append_merchant_rule(cfg, p["target"]["merchant"], p["category"])
-    return plan_result(plan, total_rows, dry_run, "Call again with dry_run=false to apply these changes.")
+    result = plan_result(plan, total_rows, dry_run, "Call again with dry_run=false to apply these changes.")
+    return _with_meta(conn, cfg, result)
 
 
 def _with_meta(conn, cfg: Config, result: dict) -> dict:

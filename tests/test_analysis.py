@@ -107,3 +107,27 @@ def test_apply_categories_refuses_transfers_and_ambiguous_targets(conn, cfg, acc
         analysis.apply_categories(conn, cfg, [{"merchant": "X", "category": "Transfers"}])
     with pytest.raises(GuardError):
         analysis.apply_categories(conn, cfg, [{"merchant": "X", "transaction_ids": [1], "category": "Dining"}])
+
+
+def test_annual_subscription_detected_with_next_expected_a_year_later():
+    series = [(date(2024, 3, 15), 9900), (date(2025, 3, 15), 9900), (date(2026, 3, 15), 9900)]
+    r = detect(series, 3, 15, TODAY)
+    assert r["cadence"] == "annual" and r["next_expected"] == "2027-03-15" and r["status"] == "active"
+
+
+def test_annual_two_occurrences_need_a_tight_amount_match():
+    steady = [(date(2025, 3, 15), 9900), (date(2026, 3, 15), 9900)]
+    r = detect(steady, 3, 15, TODAY)
+    assert r is not None and r["cadence"] == "annual" and r["next_expected"] == "2027-03-15"
+    random_pair = [(date(2025, 3, 15), 2350), (date(2026, 3, 15), 18700)]
+    assert detect(random_pair, 3, 15, TODAY) is None
+    # two charges are only enough for an annual cadence
+    assert detect([(date(2026, 8, 1), 1500), (date(2026, 9, 1), 1500)], 3, 15, TODAY) is None
+
+
+def test_refresh_recurring_looks_back_far_enough_for_annual(conn, cfg, accounts):
+    for y in (2024, 2025, 2026):
+        add_txn(conn, accounts["card"], f"{y}-03-15", -9900, "DOMAIN RENEWAL CO", "Subscriptions")
+    refresh_recurring(conn, cfg, today=TODAY)
+    row = conn.execute("SELECT cadence, next_expected FROM recurring").fetchone()
+    assert (row["cadence"], row["next_expected"]) == ("annual", "2027-03-15")

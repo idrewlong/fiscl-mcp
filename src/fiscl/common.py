@@ -116,7 +116,8 @@ def resolve_target(conn, item: dict, i: int) -> tuple[str | None, list[int] | No
     ids = item.get("transaction_ids")
     if bool(merchant) == bool(ids):
         raise GuardError(f"item {i}: give exactly one of merchant or transaction_ids")
-    select = """SELECT t.id, COALESCE(c.name, 'Uncategorized') AS current, t.scope AS scope
+    select = """SELECT t.id, COALESCE(c.name, 'Uncategorized') AS current, t.scope AS scope,
+                       EXISTS(SELECT 1 FROM splits s WHERE s.transaction_id = t.id) AS is_split
                 FROM transactions t LEFT JOIN categories c ON c.id = t.category_id"""
     if merchant:
         merchant = clean_text(str(merchant), 120)
@@ -132,6 +133,21 @@ def resolve_target(conn, item: dict, i: int) -> tuple[str | None, list[int] | No
             f"{select} WHERE t.id IN ({','.join('?' * len(ids))}) AND t.transfer_group IS NULL", ids
         ).fetchall()
     return merchant, ids, rows
+
+
+SPLIT_PARENT_NOTE = (
+    "Split transactions are counted by their parts, so changing the original has no effect. "
+    "Use split_transaction to change a split's categories or scopes."
+)
+
+
+def without_split_parents(rows) -> tuple[list, dict]:
+    """Rows an edit can change, plus the plan fields that report any split parents left out."""
+    keep = [r for r in rows if not r["is_split"]]
+    skipped = len(rows) - len(keep)
+    return keep, (
+        {"skipped_split_parents": skipped, "note": SPLIT_PARENT_NOTE} if skipped else {"skipped_split_parents": 0}
+    )
 
 
 def clean_tag(value, where: str) -> str:

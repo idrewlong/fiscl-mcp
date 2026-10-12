@@ -9,7 +9,7 @@
   },
   "verify": ["lint", "test"],
   "ownership": {
-    "backend": ["src/**", "tests/**", "pyproject.toml", "uv.lock", "examples/**"],
+    "backend": ["src/**", "tests/**", "scripts/**", "pyproject.toml", "uv.lock", "examples/**"],
     "qa": ["tests/**"],
     "devops": [".github/**"],
     "shared": ["docs/**", "specs/**", "README.md", "SECURITY.md", "CHANGELOG.md"]

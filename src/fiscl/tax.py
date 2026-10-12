@@ -10,7 +10,17 @@ import re
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from .common import check_bulk, check_items, count_by, meta, plan_result, resolve_target, target_of, year_bounds
+from .common import (
+    check_bulk,
+    check_items,
+    count_by,
+    meta,
+    plan_result,
+    resolve_target,
+    target_of,
+    without_split_parents,
+    year_bounds,
+)
 from .config import Config
 from .db import SCOPE_SQL, SPENDING_FILTER, TXN_FROM
 from .guard import GuardError, clean_text, parse_date
@@ -443,10 +453,12 @@ def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
         if scope not in ("personal", "business"):
             raise GuardError(f"item {i}: transaction scope must be personal or business")
         merchant, ids, rows = resolve_target(conn, item, i)
+        rows, skipped = without_split_parents(rows)
         total += len(rows)
         plan.append(
             {
                 "target": target_of(merchant, ids),
+                **skipped,
                 "to": scope,
                 "matched_transactions": len(rows),
                 "current": count_by(rows, lambda r: r["scope"] or "account default"),
@@ -460,7 +472,9 @@ def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
                 conn.execute("UPDATE accounts SET scope = ? WHERE id = ?", (p["to"], p["_acct"]))
             else:
                 conn.executemany("UPDATE transactions SET scope = ? WHERE id = ?", [(p["to"], t) for t in p["_ids"]])
-    return plan_result(plan, total, dry_run, "Call again with dry_run=false to apply.")
+    result = plan_result(plan, total, dry_run, "Call again with dry_run=false to apply.")
+    result["meta"] = meta(conn, cfg)
+    return result
 
 
 def log_trip(conn, cfg: Config, trip_date: str, miles, purpose: str, vehicle=None, dry_run=True) -> dict:
@@ -494,6 +508,7 @@ def log_trip(conn, cfg: Config, trip_date: str, miles, purpose: str, vehicle=Non
         "dry_run": bool(dry_run),
         "trip": trip,
         "next_step": "Call again with dry_run=false to save it." if dry_run else "Saved.",
+        "meta": meta(conn, cfg),
     }
 
 

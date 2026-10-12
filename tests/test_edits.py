@@ -379,3 +379,41 @@ def test_set_budget_refuses_to_clobber_a_broken_file(conn, cfg):
     with pytest.raises(ConfigError):
         analysis.set_budget(conn, cfg, [{"category": "Dining", "monthly": 5}], dry_run=False)
     assert cfg.budgets_file.read_text() == "this is = not [valid toml"
+
+
+# --- edits on split parents ----------------------------------------------------------------------
+
+
+def _split_parent(conn, cfg, accounts):
+    parent = add_txn(conn, accounts["card"], "2026-10-05", -10000, "AMZN MKTP", "Shopping")
+    plain = add_txn(conn, accounts["card"], "2026-10-06", -2000, "AMZN MKTP", "Shopping")
+    parts = [{"amount": -60, "category": "Groceries"}, {"amount": -40, "category": "Business: Supplies"}]
+    analysis.split_transaction(conn, cfg, transaction_id=parent, parts=parts, dry_run=False)
+    return parent, plain
+
+
+def test_apply_categories_skips_split_parents(conn, cfg, accounts):
+    parent, plain = _split_parent(conn, cfg, accounts)
+    plan = analysis.apply_categories(conn, cfg, [{"merchant": "Amzn Mktp", "category": "Gifts"}], dry_run=False)
+    item = plan["changes"][0]
+    assert item["matched_transactions"] == 1 and item["skipped_split_parents"] == 1
+    assert "split_transaction" in item["note"]
+    cats = {r["id"]: r["category_id"] for r in conn.execute("SELECT id, category_id FROM transactions")}
+    assert cats[plain] != cats[parent]
+    assert plan["transactions_affected"] == 1
+
+
+def test_set_scope_skips_split_parents(conn, cfg, accounts):
+    parent, plain = _split_parent(conn, cfg, accounts)
+    plan = tax.set_scope(conn, cfg, [{"transaction_ids": [parent, plain], "scope": "business"}], dry_run=False)
+    item = plan["changes"][0]
+    assert item["matched_transactions"] == 1 and item["skipped_split_parents"] == 1
+    assert "split_transaction" in item["note"]
+    scopes = {r["id"]: r["scope"] for r in conn.execute("SELECT id, scope FROM transactions")}
+    assert scopes[plain] == "business" and scopes[parent] is None
+
+
+def test_edits_without_split_parents_report_zero_skipped(conn, cfg, accounts):
+    t = add_txn(conn, accounts["card"], "2026-10-05", -1000, "KROGER")
+    item = analysis.apply_categories(conn, cfg, [{"transaction_ids": [t], "category": "Groceries"}])["changes"][0]
+    assert item["skipped_split_parents"] == 0 and "note" not in item
