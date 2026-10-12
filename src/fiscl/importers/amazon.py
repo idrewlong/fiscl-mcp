@@ -179,7 +179,8 @@ def parse_items(text: str, cfg: Config) -> ParsedItems:
 
 
 def _dedupe_key(item: AmazonItem, occurrence: int) -> str:
-    raw = f"{item.order_id}|{item.name.lower()}|{item.ship_date}|{item.total}|{occurrence}"
+    # Stable fields only: ship date and status change between exports of the same order, so they must not be in the key.
+    raw = f"{item.order_id}|{item.name.lower()}|{item.total}|{occurrence}"
     return "a:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -204,9 +205,10 @@ def import_items(
         seen: dict[tuple, int] = {}
         added = 0
         for item in parsed.items:
-            ident = (item.order_id, item.name.lower(), item.ship_date, item.total)
+            ident = (item.order_id, item.name.lower(), item.total)
             seen[ident] = seen.get(ident, 0) + 1
-            added += conn.execute(
+            key = _dedupe_key(item, seen[ident])
+            inserted = conn.execute(
                 """INSERT OR IGNORE INTO amazon_items
                    (order_id, order_date, ship_date, name, quantity, total, currency, import_id, dedupe_key)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -219,9 +221,16 @@ def import_items(
                     item.total,
                     item.currency,
                     import_id,
-                    _dedupe_key(item, seen[ident]),
+                    key,
                 ),
             ).rowcount
+            added += inserted
+            if not inserted and item.ship_date:
+                # A later export of a stored item: record the shipment in place (an unshipped copy must not linger).
+                conn.execute(
+                    "UPDATE amazon_items SET ship_date = ? WHERE dedupe_key = ? AND ship_date IS NOT ?",
+                    (item.ship_date, key, item.ship_date),
+                )
         result.rows_seen = parsed.rows_seen
         result.rows_added = added
         result.rows_skipped = parsed.rows_seen - added

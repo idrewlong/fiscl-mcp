@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..config import FILE_MODE, Config, toml_string
 from ..guard import GuardError, clean_text, safe_regex
-from ..money import AmountError, is_currency_code, parse_amount
+from ..money import CURRENCY_CODE_MSG, AmountError, is_currency_code, parse_amount
 from .types import ParsedStatement, ParsedTxn
 
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%b %d, %Y", "%d %b %Y")
@@ -78,7 +78,7 @@ class Profile:
         if p.currency is not None:
             p.currency = p.currency.strip().upper() if isinstance(p.currency, str) else ""
             if not is_currency_code(p.currency):
-                raise CSVImportError(f"profile {source}: currency must be a 3-letter code like EUR")
+                raise CSVImportError(f"profile {source}: currency {CURRENCY_CODE_MSG}")
         if p.kind == "holdings":
             p._validate_holdings(source)
         else:

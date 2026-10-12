@@ -67,12 +67,19 @@ def test_every_exponent_fiscl_declares_matches_iso_4217():
         assert ISO_EXPONENTS.get(code) == exp, code
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-1: money.CURRENCY_EXPONENT omits CLF and UYW, whose ISO 4217 minor unit is 4 (priced as 2 decimals)",
-)
 def test_every_non_two_decimal_iso_currency_is_declared():
     assert {c: exponent(c) for c in ISO_EXPONENTS} == ISO_EXPONENTS
+
+
+@pytest.mark.parametrize("code", ["XAU", "XAG", "XPT", "XPD", "XDR", "XTS", "XXX", "XBA", "XSU", "XUA"])
+def test_currencies_without_a_minor_unit_are_refused_with_a_fixed_message(conn, cfg, code):
+    from fiscl.guard import GuardError
+    from fiscl.money import CURRENCY_CODE_MSG, is_currency_code
+
+    assert not is_currency_code(code) and is_currency_code("CLF") and is_currency_code("EUR")
+    with pytest.raises(GuardError, match="metals, fund units and test codes") as exc:
+        fx.check_foreign_currency(code, cfg)
+    assert code not in str(exc.value) and CURRENCY_CODE_MSG in str(exc.value)
 
 
 # --- FX arithmetic against an independent oracle ----------------------------------------------------------------------
@@ -276,11 +283,6 @@ def test_fx_refresh_after_manual_recompute_changes_nothing(conn, cfg):
 # --- transfers between accounts in different currencies --------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-2: match_transfers pairs by native minor units, so USD -100.00 and EUR +100.00 pair as a transfer; "
-    "DECISIONS 2026-10-12 says different-currency transfers won't auto-match",
-)
 def test_equal_native_amounts_in_different_currencies_are_not_paired_as_a_transfer(conn, cfg):
     add_account(conn, "US", "checking")
     import_eur(conn, cfg, [("2026-09-01", -10000, "Transfer")], name="US", currency="USD", digest="u")
@@ -315,11 +317,6 @@ def test_two_digit_year_pivot_in_range(cfg, raw, iso):
     assert qif_dates(cfg, raw) == [iso]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-3: an apostrophe year ('YY) is Quicken's post-1999 marker, but the pivot maps 'YY > current+1 to 19YY, "
-    "so a scheduled/future 2030 item imports as 1930",
-)
 def test_apostrophe_years_are_always_2000s(cfg):
     assert qif_dates(cfg, "1/1'30", "6/15'45") == ["2030-01-01", "2045-06-15"]
 
@@ -434,27 +431,19 @@ def test_one_item_is_never_proposed_for_two_charges(conn, cfg, accounts):
     r = matches(conn, cfg)
     claimed = [i["name"] for p in r["proposals"] for i in p["items"]]
     assert len(claimed) == len(set(claimed)), claimed
+    # Colliding charges are all ambiguous (none wins), so the user decides which charge paid for which items.
+    assert r["proposals"] == [] and len(r["ambiguous"]) == 2
 
 
-test_one_item_is_never_proposed_for_two_charges = pytest.mark.xfail(
-    strict=True,
-    reason="BUG-4: amazon_matches proposes items A and B twice (shipment proposal and whole-order proposal): the "
-    "claim guard only compares groups of the same kind and key",
-)(test_one_item_is_never_proposed_for_two_charges)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-5: Amazon row dedupe includes ship_date, so a later export with the ship date filled in re-adds every "
-    "item (order totals double, a stale 'unshipped' copy stays)",
-)
 def test_reexport_after_shipping_does_not_duplicate_items(conn, cfg, tmp_path):
     head = "Order ID,Order Date,Ship Date,Product Name,Quantity,Total Owed,Currency\n"
     first = write(tmp_path / "a.csv", head + "111-1,2026-09-01,Not Available,Widget,1,10.00,USD\n")
     later = write(tmp_path / "b.csv", head + "111-1,2026-09-01,2026-09-02,Widget,1,10.00,USD\n")
     import_file(conn, cfg, first)
-    import_file(conn, cfg, later)
-    assert conn.execute("SELECT COUNT(*) FROM amazon_items").fetchone()[0] == 1
+    r = import_file(conn, cfg, later)
+    assert r.rows_added == 0
+    rows = conn.execute("SELECT ship_date FROM amazon_items").fetchall()
+    assert [x["ship_date"] for x in rows] == ["2026-09-02"]  # shipment recorded in place
 
 
 def test_amazon_refund_rows_and_positive_card_credits_are_never_proposed(conn, cfg, accounts, tmp_path):
@@ -664,11 +653,21 @@ def test_forget_works_even_if_the_stored_app_keys_are_gone(cfg, conn, keychain):
     assert not leftovers and connections.list_rows(conn, "qbo") == []
 
 
-test_forget_works_even_if_the_stored_app_keys_are_gone = pytest.mark.xfail(
-    strict=True,
-    reason="BUG-6: QboConnector.forget() calls load_app_credentials() first, so once the app keys are missing "
-    "`fiscl connect forget qbo` raises and the refresh token + realm id stay in the keychain with no fiscl way out",
-)(test_forget_works_even_if_the_stored_app_keys_are_gone)
+def test_forget_without_app_keys_reports_the_skipped_revoke_and_calls_nothing(cfg, conn, keychain, capsys):
+    _connected(cfg, conn, keychain)
+    qbo.forget_app_credentials()
+    api = FakeQbo()
+    notices: list[str] = []
+    assert registry.forget(conn, cfg, "qbo", opener=api, notices=notices) == 1
+    assert notices == [registry.REVOKE_SKIPPED] and api.calls == []
+    # the CLI prints the fixed notice on stderr
+    _connected(cfg, conn, keychain)
+    qbo.forget_app_credentials()
+    from fiscl import cli
+
+    assert cli.main(["--home", str(cfg.home), "connect", "forget", "qbo"]) == 0
+    captured = capsys.readouterr()
+    assert registry.REVOKE_SKIPPED in captured.err and registry.REVOKE_SKIPPED not in captured.out
 
 
 def test_a_5xx_or_network_failure_on_revoke_deletes_nothing(cfg, conn, keychain):

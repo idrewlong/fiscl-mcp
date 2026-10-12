@@ -19,14 +19,14 @@ HINT = re.compile(
 
 
 def match_transfers(conn: sqlite3.Connection, cfg: Config) -> int:
-    """Pair opposite, equal amounts in different accounts within the window.
+    """Pair opposite, equal amounts in the same currency in different accounts within the window.
 
     A pair only matches when at least one side looks like a transfer (description hint) or one
     account is a credit card or loan, to avoid pairing unrelated $50 charges and deposits.
     Returns the number of pairs matched.
     """
     rows = conn.execute(
-        """SELECT t.id, t.account_id, t.posted_date, t.amount, t.raw_description, t.category_source,
+        """SELECT t.id, t.account_id, t.posted_date, t.amount, t.currency, t.raw_description, t.category_source,
                   a.type AS account_type
            FROM transactions t JOIN accounts a ON a.id = t.account_id
            WHERE t.transfer_group IS NULL AND t.is_pending = 0 AND t.category_source != 'manual'
@@ -46,7 +46,8 @@ def match_transfers(conn: sqlite3.Connection, cfg: Config) -> int:
         out_day = date.fromisoformat(out["posted_date"])
         best, best_score = None, None
         for cand in incoming.get(-out["amount"], []):
-            if cand["id"] in used or cand["account_id"] == out["account_id"]:
+            # Equal native minor units in different currencies are a coincidence, not a transfer.
+            if cand["id"] in used or cand["account_id"] == out["account_id"] or cand["currency"] != out["currency"]:
                 continue
             gap = abs((date.fromisoformat(cand["posted_date"]) - out_day).days)
             if gap > window:

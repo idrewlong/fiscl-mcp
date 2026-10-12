@@ -28,7 +28,7 @@ MONTH_FIRST_MSG = "QIF dates look month-first; re-import with --qif-date mdy"
 _ISO = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _DOTTED = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})")
 # `M/D'YY`, `M/ D/YY`, `MM/DD/YYYY`: Quicken pads with spaces and marks post-1999 two-digit years with an apostrophe.
-_SLASHED = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\s*['/]\s*(\d{2}|\d{4})")
+_SLASHED = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\s*(?P<sep>['/])\s*(\d{2}|\d{4})")
 _TRANSFER = re.compile(r"\[.+\]")
 
 
@@ -49,12 +49,15 @@ def _bad_date(index: int) -> QIFError:
     return QIFError(f"bad or missing date in QIF record {index}")
 
 
-def _year(raw: str, now_year: int | None = None) -> int:
-    """A four-digit year as written. Two digits use a pivot: YY up to (current year % 100) + 1 means 20YY (a file
-    may run one year ahead), anything higher means 19YY, so pre-2000 files aren't shifted a century."""
+def _year(raw: str, now_year: int | None = None, apostrophe: bool = False) -> int:
+    """A four-digit year as written. An apostrophe year (`'YY`) is Quicken's post-1999 marker, so it is always 20YY
+    (scheduled items can sit decades out). Other two-digit years use a pivot: YY up to (current year % 100) + 1 means
+    20YY (a file may run one year ahead), anything higher means 19YY, so pre-2000 files aren't shifted a century."""
     if len(raw) == 4:
         return int(raw)
     yy = int(raw)
+    if apostrophe:
+        return 2000 + yy
     return (2000 if yy <= (now_year or date.today().year) % 100 + 1 else 1900) + yy
 
 
@@ -66,7 +69,7 @@ def _parse_date(value: str, order: str, index: int) -> str:
         elif m := _DOTTED.fullmatch(text):
             d, mo, y = int(m[1]), int(m[2]), _year(m[3])  # dotted dates are day-first in every export seen
         elif m := _SLASHED.fullmatch(text):
-            first, second, y = int(m[1]), int(m[2]), _year(m[3])
+            first, second, y = int(m[1]), int(m[2]), _year(m[4], apostrophe=m["sep"] == "'")
             if order == "mdy":
                 if first > 12 and second <= 12:
                     raise QIFError(DAY_FIRST_MSG)

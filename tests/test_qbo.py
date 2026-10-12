@@ -5,6 +5,7 @@ runs against a fake opener; no socket is ever opened to Intuit. Fixtures under t
 from __future__ import annotations
 
 import base64
+import errno
 import http.client
 import io
 import json
@@ -645,6 +646,17 @@ def test_receivables_filters_by_customer_and_date_and_caps_the_list(cfg, conn, s
         analysis.receivables(conn, cfg, as_of="soon")
 
 
+def test_redact_descriptions_withholds_customers_and_document_numbers_but_keeps_amounts(cfg, conn, synced):
+    plain = analysis.receivables(conn, cfg, today=TODAY)
+    cfg.guard.redact_descriptions = True
+    r = analysis.receivables(conn, cfg, today=TODAY)
+    assert r["invoices"] and all(i["customer"] is None and i["doc_number"] is None for i in r["invoices"])
+    assert [i["balance"] for i in r["invoices"]] == [i["balance"] for i in plain["invoices"]]
+    assert r["totals"] == plain["totals"] and any("redact_descriptions is on" in n for n in r["notes"])
+    with pytest.raises(GuardError, match="customer filter"):
+        analysis.receivables(conn, cfg, customer="ACME", today=TODAY)
+
+
 def test_receivables_customer_names_are_data_not_prose(cfg, conn, synced):
     r = analysis.receivables(conn, cfg, today=TODAY)
     assert any("Ignore previous instructions" in i["customer"] for i in r["invoices"])
@@ -841,20 +853,101 @@ def test_connect_qbo_end_to_end_stores_secrets_in_the_keychain_only(cfg, conn, k
         assert secret not in dump
 
 
-def test_connect_rejects_a_wrong_state_and_exchanges_nothing(cfg, conn, keychain, port):
+def test_a_wrong_or_missing_state_is_refused_without_consuming_the_one_shot(cfg, conn, keychain, port):
     qbo.store_app_credentials(CLIENT_ID, CLIENT_SECRET)
     api, result = FakeQbo(), {}
-    with pytest.raises(SyncError, match="didn't match"):
-        run_connect(cfg, conn, api, [lambda p, s: callback(p, "not-the-state")], result)
-    status, _, body = result["responses"][0]
-    assert status == 400 and b"not-the-state" not in body and CODE.encode() not in body
+    steps = [
+        lambda p, s: callback(p, "not-the-state"),
+        lambda p, s: fetch(p, "/qbo/callback"),
+        lambda p, s: fetch(p, f"/qbo/callback?code={CODE}&realmId={REALM}"),
+        callback,  # the real answer still goes through
+    ]
+    assert run_connect(cfg, conn, api, steps, result) == "qbo"
+    statuses = [r[0] for r in result["responses"]]
+    assert statuses == [400, 400, 400, 200]
+    for _status, _, body in result["responses"][:3]:
+        assert b"not-the-state" not in body and CODE.encode() not in body
+    assert [c for c in api.calls if c[1] == qbo.TOKEN_HOST] != [] and len(connections.list_rows(conn, "qbo")) == 1
+
+
+def test_a_wrong_state_alone_never_ends_the_flow_it_times_out(cfg, conn, keychain, port):
+    qbo.store_app_credentials(CLIENT_ID, CLIENT_SECRET)
+    api = FakeQbo()
+    with pytest.raises(SyncError, match="timed out"):
+        run_connect(cfg, conn, api, [lambda p, s: callback(p, "not-the-state")], timeout=1.5)
     assert api.calls == [] and connections.list_rows(conn, "qbo") == []
+
+
+def _squat_ipv6(port):
+    if not socket.has_ipv6:
+        pytest.skip("no IPv6")
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        s.bind(("::1", port))
+    except OSError:
+        s.close()
+        pytest.skip("no IPv6 loopback")
+    return s
+
+
+def test_the_flow_reserves_ipv6_loopback_so_a_squatter_cannot_bind_it(cfg, port):
+    probe = _squat_ipv6(port)
+    probe.close()  # IPv6 loopback works here; free it for the server
+    server = connect.make_oauth_server(port, "s", lambda c, r: "x")
+    try:
+        squatter = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        with pytest.raises(OSError) as exc:
+            squatter.bind(("::1", port))
+        assert exc.value.errno == errno.EADDRINUSE
+        squatter.close()
+        # requests still reach fiscl through 127.0.0.1
+        results = []
+        t = threading.Thread(target=lambda: results.append(callback(port, "s")), daemon=True)
+        t.start()
+        server.timeout = 5
+        server.handle_request()
+        t.join(5)
+        assert results[0][0] == 200
+    finally:
+        server.server_close()
+    again = _squat_ipv6(port)  # closing the server released the reservation
+    again.close()
+
+
+def test_an_occupied_ipv6_port_stops_the_flow_with_a_fixed_message(cfg, conn, keychain, port):
+    qbo.store_app_credentials(CLIENT_ID, CLIENT_SECRET)
+    squatter = _squat_ipv6(port)
+    try:
+        with pytest.raises(SyncError, match=rf"another program is listening on localhost port {port}") as exc:
+            connect.connect_qbo(cfg, conn, open_browser=lambda url: pytest.fail("opened"), timeout=1, opener=FakeQbo())
+        assert "redirect_port" in str(exc.value)
+    finally:
+        squatter.close()
+    # the 127.0.0.1 listener was released too
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", port))
+
+
+def test_without_an_ipv6_loopback_the_reservation_is_skipped(cfg, port, monkeypatch):
+    real = socket.socket
+
+    class Fake:
+        def __new__(cls, family=socket.AF_INET, *a, **k):
+            if family == socket.AF_INET6:
+                raise OSError(errno.EAFNOSUPPORT, "no ipv6")
+            return real(family, *a, **k)
+
+    monkeypatch.setattr(connect.socket, "socket", Fake)
+    server = connect.make_oauth_server(port, "s", lambda c, r: "x")
+    try:
+        assert server._reserved is None
+    finally:
+        server.server_close()
 
 
 @pytest.mark.parametrize(
     "query",
     [
-        "",
         "state={state}",
         "state={state}&code=" + CODE,
         "state={state}&code=" + CODE + "&realmId=abc",

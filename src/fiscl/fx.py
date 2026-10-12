@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .config import Config
 from .guard import GuardError, parse_date
-from .money import exponent, is_currency_code
+from .money import CURRENCY_CODE_MSG, exponent, is_currency_code
 
 MAX_RATE = Decimal(1_000_000)
 MAX_SIGNIFICANT_DIGITS = 12
@@ -60,7 +60,7 @@ def check_foreign_currency(value: object, cfg: Config, field: str = "currency") 
     """An upper-cased ISO-style code that isn't the home currency (a home rate would be meaningless)."""
     code = value.strip().upper() if isinstance(value, str) else ""
     if not is_currency_code(code):
-        raise GuardError(f"{field} must be a 3-letter currency code like EUR")
+        raise GuardError(f"{field} {CURRENCY_CODE_MSG}")
     if code == cfg.currency:
         raise GuardError(f"{field} can't be your home currency; rates convert other currencies into it")
     return code

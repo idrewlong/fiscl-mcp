@@ -49,7 +49,7 @@ EMPTY_NOTE = (
 Q_TWO = "Two orders match this charge; which items were in it?"
 Q_MANY = "Several orders match this charge; which items were in it?"
 Q_SHIPMENTS = "Several shipments of one order match this charge; which items were in it?"
-Q_CLAIMED = "More than one charge matches this order; which charge paid for which items?"
+Q_CLAIMED = "More than one charge matches the same items; which charge paid for which items?"
 
 
 @dataclass
@@ -262,10 +262,14 @@ def amazon_matches(
 
     open_charges = [c for c in charges if not c["is_split"]]
     found_by_charge = {c["id"]: _candidates(c, ships, orders, used_shipments, used_orders) for c in open_charges}
-    claims: dict[tuple, int] = {}
-    for found, _ in found_by_charge.values():
+    # Claims are per item, not per group: a shipment-level and an order-level candidate for different charges share
+    # items, and an item may be proposed for at most one charge. When charges collide, none of them is proposed
+    # (all become ambiguous); the user decides which charge paid for which items.
+    item_claims: dict[int, set[int]] = {}
+    for charge_id, (found, _) in found_by_charge.items():
         for g in found:
-            claims[(g.kind, g.key)] = claims.get((g.kind, g.key), 0) + 1
+            for it in g.items:
+                item_claims.setdefault(it["id"], set()).add(charge_id)
 
     proposals: list[dict] = []
     ambiguous: list[dict] = []
@@ -277,7 +281,7 @@ def amazon_matches(
             continue
         for g in found:
             touched.update(g.order_ids)
-        if len(found) == 1 and claims[(found[0].kind, found[0].key)] == 1:
+        if len(found) == 1 and all(item_claims[it["id"]] == {c["id"]} for it in found[0].items):
             proposals.append(_proposal(c, found[0], tolerance, rules, cfg))
             continue
         distinct = {o for g in found for o in g.order_ids}

@@ -335,7 +335,10 @@ def cmd_connect(cfg, args) -> int:
                 _print(registry.list_connections(conn, cfg))
         elif args.target == "forget":
             with open_db(cfg) as conn:
-                revoked = registry.forget(conn, cfg, args.provider, args.institution)
+                notices: list[str] = []
+                revoked = registry.forget(conn, cfg, args.provider, args.institution, notices=notices)
+            for notice in notices:
+                say(notice)
             if args.institution:
                 print(f"Disconnected {revoked} {args.provider} connection(s) matching that institution.")
             else:

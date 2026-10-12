@@ -532,6 +532,7 @@ class QboConnector:
         self.companies = companies
         self.http = Http(opener, sleep)
         self.warnings: list[str] = []
+        self.revoke_skipped = False
 
     def sync_records(self, conn: sqlite3.Connection, today: date) -> dict:
         require_sandbox(self.cfg)
@@ -636,11 +637,15 @@ class QboConnector:
 
     def forget(self) -> None:
         """Revoke each stored grant at Intuit, then delete the keychain entries. If Intuit can't be told (network,
-        server error) nothing is deleted. A grant Intuit already considers dead (400/401) counts as revoked."""
-        client_id, secret = load_app_credentials()
+        server error) nothing is deleted. A grant Intuit already considers dead (400/401) counts as revoked. Revoking
+        needs the app keys; if they are gone the revoke is skipped (`revoke_skipped`) and the refresh token, realm id
+        are deleted anyway, so the user always has a way out."""
+        creds = load_app_credentials() if has_app_credentials() else None
+        self.revoke_skipped = creds is None
         for company in self.companies:
             token = base.secret_get(_name(company.ref))
-            if token:
+            if token and creds is not None:
+                client_id, secret = creds
                 try:
                     revoke_token(self.http, client_id, secret, token)
                 except SyncError as exc:

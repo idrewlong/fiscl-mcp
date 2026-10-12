@@ -16,8 +16,17 @@ SYMBOLS = {"USD": "$", "CAD": "CA$", "EUR": "€", "GBP": "£", "AUD": "A$", "JP
 _ZERO_EXPONENT = ("BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG")
 _ZERO_EXPONENT += ("RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF")
 _THREE_EXPONENT = ("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
-CURRENCY_EXPONENT: dict[str, int] = {**dict.fromkeys(_ZERO_EXPONENT, 0), **dict.fromkeys(_THREE_EXPONENT, 3)}
+_FOUR_EXPONENT = ("CLF", "UYW")
+CURRENCY_EXPONENT: dict[str, int] = {
+    **dict.fromkeys(_ZERO_EXPONENT, 0),
+    **dict.fromkeys(_THREE_EXPONENT, 3),
+    **dict.fromkeys(_FOUR_EXPONENT, 4),
+}
 ZERO_DECIMAL = {code for code, exp in CURRENCY_EXPONENT.items() if exp == 0}
+# ISO 4217 codes with no minor unit ("N.A."): precious metals, IMF units, the test code and "no currency". They have no
+# decimal convention to price in, so they are refused as transaction currencies rather than guessed at two places.
+NO_MINOR_UNIT = frozenset({"XAU", "XAG", "XPT", "XPD", "XDR", "XTS", "XXX", "XBA", "XBB", "XBC", "XBD", "XSU", "XUA"})
+CURRENCY_CODE_MSG = "must be a 3-letter currency code like EUR (metals, fund units and test codes are not supported)"
 _CURRENCY_CODE = re.compile(r"[A-Z]{3}")
 
 
@@ -26,7 +35,7 @@ def exponent(currency: str) -> int:
 
 
 def is_currency_code(value: object) -> bool:
-    return isinstance(value, str) and _CURRENCY_CODE.fullmatch(value) is not None
+    return isinstance(value, str) and _CURRENCY_CODE.fullmatch(value) is not None and value not in NO_MINOR_UNIT
 
 
 class AmountError(ValueError):

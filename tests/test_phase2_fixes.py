@@ -540,7 +540,12 @@ NETWORK_MODULES = {
     "websockets",
 }
 # connect.py's loopback-only one-shot server (127.0.0.1, random port, token URL) is the single allowed exception.
-ALLOWED_NETWORK_IMPORTS = {"sync/base.py": {"urllib.request", "ssl"}, "sync/connect.py": {"http.server"}}
+# It imports `socket` only to reserve [::1] on the QuickBooks redirect port (bind without listen), so a local program
+# can't squat the address `localhost` may resolve to; it never connects anywhere.
+ALLOWED_NETWORK_IMPORTS = {
+    "sync/base.py": {"urllib.request", "ssl"},
+    "sync/connect.py": {"http.server", "socket"},
+}
 
 
 def _imported_modules(tree):

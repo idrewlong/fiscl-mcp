@@ -208,9 +208,20 @@ def list_connections(conn: sqlite3.Connection, cfg: Config, today: date | None =
     }
 
 
-def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: str | None = None, opener=None) -> int:
+REVOKE_SKIPPED = "Revoking at Intuit was skipped because the QuickBooks app keys are no longer stored."
+
+
+def forget(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    provider: str,
+    institution: str | None = None,
+    opener=None,
+    notices: list[str] | None = None,
+) -> int:
     """Revoke at the provider, delete the keychain entries, drop the connection rows. Returns how many
-    connections were revoked; naming an institution that isn't connected is an error, not a silent success."""
+    connections were revoked; naming an institution that isn't connected is an error, not a silent success.
+    Fixed-text caveats (a revoke that could not be attempted) are appended to `notices` when given."""
     choice(provider, PROVIDERS, "provider")
     rows = connections.list_rows(conn, provider, institution)
     if institution and not rows:
@@ -232,6 +243,8 @@ def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: st
     elif provider == "qbo":
         connector = build_connector(provider, conn, cfg, opener, institution)
         connector.forget()  # raises (keeping the token) if Intuit couldn't be told
+        if connector.revoke_skipped and notices is not None:
+            notices.append(REVOKE_SKIPPED)
         if institution is None:
             qbo.forget_app_credentials()
     connections.delete_rows(conn, provider, [r["item_ref_hash"] for r in rows])

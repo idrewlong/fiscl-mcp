@@ -11,7 +11,7 @@ from .. import fx
 from ..common import meta, plan_result, with_meta
 from ..config import Config
 from ..guard import GuardError, clamp_limit, parse_date
-from ..money import is_currency_code
+from ..money import CURRENCY_CODE_MSG, is_currency_code
 
 MAX_RATE_ITEMS = 500
 MAX_GAP_RANGES = 50
@@ -116,7 +116,7 @@ def list_fx_rates(conn, cfg: Config, currency=None, start_date=None, end_date=No
     if currency:
         code = str(currency).strip().upper()
         if not is_currency_code(code):
-            raise GuardError("currency must be a 3-letter currency code like EUR")
+            raise GuardError(f"currency {CURRENCY_CODE_MSG}")
     start, end = parse_date(start_date, "start_date"), parse_date(end_date, "end_date")
     if start and end and start > end:
         raise GuardError("start_date must be on or before end_date")

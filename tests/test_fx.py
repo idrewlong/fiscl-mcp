@@ -688,3 +688,45 @@ def test_fx_module_imports_no_network_libraries():
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             modules.add(node.module.split(".")[0])
     assert not modules & {"socket", "urllib", "http", "requests", "ssl", "httpx"}
+
+
+# --- performance (DoD: aggregates stay fast with materialized home amounts) ---------------------------------------
+
+
+def test_aggregates_stay_fast_on_50k_rows_with_ten_percent_foreign(conn, cfg):
+    import time
+
+    usd = add_account(conn, "Checking", "checking")
+    eur = eur_account(conn)
+    conn.execute("INSERT OR IGNORE INTO categories (name) VALUES ('Dining')")
+    cat = conn.execute("SELECT id FROM categories WHERE name = 'Dining'").fetchone()[0]
+    rows = []
+    for i in range(50_000):
+        foreign = i % 10 == 0
+        minor = -(100 + i % 5000)
+        rows.append(
+            (
+                eur if foreign else usd,
+                f"2026-{1 + i % 9:02d}-{1 + i % 28:02d}",
+                minor,
+                "EUR" if foreign else "USD",
+                minor * 11 // 10 if foreign else minor,
+                f"M{i % 300}",
+                cat,
+                f"fx{i}",
+            )
+        )
+    conn.executemany(
+        """INSERT INTO transactions (account_id, posted_date, amount, currency, amount_home, raw_description, merchant,
+           category_id, category_source, dedupe_key) VALUES (?, ?, ?, ?, ?, 'x', ?, ?, 'manual', ?)""",
+        rows,
+    )
+    conn.commit()
+    t0 = time.monotonic()
+    summary = analysis.spending_summary(conn, cfg, from_="2026-01-01", to="2026-12-31", today=TODAY)
+    analysis.cash_flow(conn, cfg, from_="2026-01-01", to="2026-12-31", today=TODAY)
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    print(f"fx benchmark: spending_summary + cash_flow on 50k rows (10% foreign) took {elapsed_ms:.0f} ms")
+    assert summary["meta"]["row_count"] > 0
+    # Spec budget is 200 ms each; the bar is loose for slow CI machines (same as the other benchmarks).
+    assert elapsed_ms < 1500, f"two aggregates took {elapsed_ms:.0f} ms"
