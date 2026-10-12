@@ -52,7 +52,9 @@ class OneShotServer(HTTPServer):
         self.render = render  # nonce -> (html, content-security-policy)
         self.on_post = on_post
         self.consumed = False
+        self.result: object = None  # what on_post returned (the saved institution), for the human to confirm
         self.error: str | None = None
+        self.deadline: float | None = None  # monotonic; set by serve_once so no connection outlives the flow
         self.timeout = 0.5
 
     @property
@@ -69,6 +71,20 @@ class _Handler(BaseHTTPRequestHandler):
     server: OneShotServer  # type: ignore[assignment]
     server_version = "fiscl-connect"
     sys_version = ""
+    timeout = 10  # per socket read; setup() shrinks it so a stalled client can't outlive the overall deadline
+
+    def setup(self):
+        deadline = self.server.deadline
+        if deadline is not None:
+            self.timeout = max(0.05, min(self.timeout, deadline - time.monotonic()))
+        super().setup()
+
+    def handle(self):
+        # A stalled, half-open, or dropped client must never hang or crash the flow; it just loses its turn.
+        try:
+            super().handle()
+        except (TimeoutError, OSError):
+            self.close_connection = True
 
     def log_message(self, *args):  # nothing may print: the URL contains the token
         pass
@@ -104,9 +120,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(404, b"not found")
         if self.server.consumed:
             return self._send(409, b'{"ok": false, "error": "already used"}', "application/json")
-        self.server.consumed = True  # exactly one POST, whatever it contains
-        origin = self.headers.get("Origin")
         try:
+            origin = self.headers.get("Origin")
             if origin is not None and origin != f"http://{BIND_HOST}:{self.server.server_port}":
                 raise ValueError("unexpected origin")
             if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "application/json":
@@ -114,17 +129,27 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or "-1")
             if not 0 < length <= MAX_BODY:
                 raise ValueError("bad length")
-            data = json.loads(self.rfile.read(length).decode())
+        except ValueError:
+            self.server.consumed = True  # a malformed authorised POST still ends the flow
+            return self._fail(400, "the result wasn't valid")
+        raw = self.rfile.read(length)  # a stall raises TimeoutError: the slot stays free for the real browser
+        if len(raw) != length:
+            raise ConnectionError("client closed before sending the whole body")
+        self.server.consumed = True  # exactly one complete POST, whatever it contains
+        try:
+            data = json.loads(raw.decode())
             if not isinstance(data, dict):
                 raise ValueError("expected an object")
-            self.server.on_post(data)
+            self.server.result = self.server.on_post(data)
         except (ValueError, SyncError) as exc:
-            self.server.error = str(exc) if isinstance(exc, SyncError) else "the result wasn't valid"
-            return self._send(400, json.dumps({"ok": False, "error": self.server.error}).encode(), "application/json")
+            return self._fail(400, str(exc) if isinstance(exc, SyncError) else "the result wasn't valid")
         except Exception:  # a bug or a full disk must not look like success
-            self.server.error = "fiscl couldn't save the connection; see the terminal"
-            return self._send(500, json.dumps({"ok": False, "error": self.server.error}).encode(), "application/json")
+            return self._fail(500, "fiscl couldn't save the connection; see the terminal")
         self._send(200, b'{"ok": true}', "application/json")
+
+    def _fail(self, code: int, message: str):
+        self.server.error = message
+        self._send(code, json.dumps({"ok": False, "error": message}).encode(), "application/json")
 
     def _nope(self):
         self._send(405, b"method not allowed", extra={"Allow": "GET, POST"})
@@ -133,10 +158,11 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve_once(server: OneShotServer, timeout: float = TIMEOUT_SECONDS) -> None:
-    """Handle requests until the single POST has arrived or the deadline passes."""
-    deadline = time.monotonic() + timeout
+    """Handle requests until the single POST has arrived or the deadline passes. Connection handling is bounded by
+    the same deadline, so a stalled client can't hold the CLI past it."""
+    server.deadline = time.monotonic() + timeout
     try:
-        while not server.consumed and time.monotonic() < deadline:
+        while not server.consumed and time.monotonic() < server.deadline:
             server.handle_request()
     finally:
         server.server_close()
@@ -158,6 +184,9 @@ def run_flow(
     if not open_browser(server.url):
         announce(f"Open this link in your browser: {server.url}")
     serve_once(server, timeout)
+    if isinstance(server.result, str) and server.result:
+        announce(f"Saved a connection to: {server.result}. If that isn't the bank you just linked, forget it with")
+        announce("`fiscl connect forget <provider> --institution NAME` and connect again.")
 
 
 def _js(value) -> str:
@@ -212,9 +241,14 @@ OS keychain on this machine.</p>
                      enrollment: {{ id: en.id, institution: {{ name: en.institution && en.institution.name }} }} }};
         fetch(location.pathname, {{ method: "POST", headers: {{ "Content-Type": "application/json" }},
                                    body: JSON.stringify(body) }})
-          .then(function (r) {{ return r.json(); }})
-          .then(function (j) {{ say(j.ok ? "Connected. You can close this tab and go back to the terminal."
-                                          : "Not saved: " + j.error); }})
+          .then(function (r) {{ return r.json().then(function (j) {{ return {{ status: r.status, j: j }}; }}); }})
+          .then(function (x) {{
+            say(x.status === 409
+              ? "WARNING: fiscl had already received a result for this link. Do not rely on it: in the terminal run " +
+                "`fiscl connect forget <provider>` and connect again."
+              : x.j.ok ? "Connected. You can close this tab and go back to the terminal."
+                       : "Not saved: " + x.j.error);
+          }})
           .catch(function () {{ say("Could not reach fiscl on this machine."); }});
       }},
       onExit: function () {{ say("Closed without connecting."); }},
@@ -243,17 +277,46 @@ def parse_teller_enrollment(data: dict) -> tuple[str, str, str]:
     return token, eid, clean_text(name if isinstance(name, str) else "", 80)
 
 
-def save_teller_enrollment(conn: sqlite3.Connection, data: dict) -> str:
-    """Token to keychain first, then the connection row; roll the keychain entry back if the row fails."""
-    token, eid, institution = parse_teller_enrollment(data)
-    ref = connections.item_ref_hash("teller", eid)
-    teller.store_access_token(ref, token)
+def _store_then_record(
+    conn: sqlite3.Connection,
+    provider: str,
+    ref: str,
+    token: str,
+    institution: str,
+    revoke: Callable[[], None] | None,
+) -> None:
+    """Token to the keychain first, then the connection row. If either fails, put the keychain back exactly as it
+    was (restore a token we overwrote rather than deleting a working one) and, when we created the grant just now,
+    best-effort revoke it at the provider so a failed save can't leave a live, untracked grant."""
+    name = base.secret_name(provider, ref)
+    previous = base.secret_get(name)
     try:
-        connections.add_connection(conn, "teller", institution, ref)
+        base.secret_set(name, token)
+        connections.add_connection(conn, provider, institution, ref)
         conn.commit()
     except Exception:
-        base.secret_delete(base.secret_name("teller", ref))
+        conn.rollback()
+        try:
+            if previous is not None:
+                base.secret_set(name, previous)
+            else:
+                base.secret_delete(name)
+        except Exception:  # keep the original failure as the story
+            pass
+        if previous is None and revoke is not None:
+            try:
+                revoke()
+            except Exception:
+                pass
         raise
+
+
+def save_teller_enrollment(conn: sqlite3.Connection, data: dict, revoke: Callable[[str], None] | None = None) -> str:
+    """Store the enrollment's token and row atomically (see `_store_then_record`). `revoke(token)` is called only
+    when saving failed and nothing was stored before."""
+    token, eid, institution = parse_teller_enrollment(data)
+    ref = connections.item_ref_hash("teller", eid)
+    _store_then_record(conn, "teller", ref, token, institution, (lambda: revoke(token)) if revoke else None)
     return institution
 
 
@@ -263,6 +326,7 @@ def connect_teller(
     open_browser: Callable[[str], object] = webbrowser.open,
     timeout: float = TIMEOUT_SECONDS,
     announce: Callable[[str], None] = lambda msg: None,
+    opener=None,
 ) -> str:
     """Run the whole flow. Credentials (application id, and the certificate outside sandbox) must already be
     in the keychain; the CLI collects them first."""
@@ -274,7 +338,9 @@ def connect_teller(
     server = make_server(
         secrets.token_urlsafe(32),
         lambda nonce: (teller_page(app_id, env, nonce), teller_csp(nonce)),
-        lambda data: save_teller_enrollment(conn, data),
+        lambda data: save_teller_enrollment(
+            conn, data, lambda tok: teller.TellerConnector(cfg, [], opener=opener).revoke_token(tok)
+        ),
     )
     run_flow(server, f"Teller {env}", open_browser, timeout, announce)
     return "teller"
@@ -325,9 +391,14 @@ OS keychain on this machine.</p>
         var body = {{ public_token: publicToken, institution: {{ name: inst.name }} }};
         fetch(location.pathname, {{ method: "POST", headers: {{ "Content-Type": "application/json" }},
                                    body: JSON.stringify(body) }})
-          .then(function (r) {{ return r.json(); }})
-          .then(function (j) {{ say(j.ok ? "Connected. You can close this tab and go back to the terminal."
-                                          : "Not saved: " + j.error); }})
+          .then(function (r) {{ return r.json().then(function (j) {{ return {{ status: r.status, j: j }}; }}); }})
+          .then(function (x) {{
+            say(x.status === 409
+              ? "WARNING: fiscl had already received a result for this link. Do not rely on it: in the terminal run " +
+                "`fiscl connect forget <provider>` and connect again."
+              : x.j.ok ? "Connected. You can close this tab and go back to the terminal."
+                       : "Not saved: " + x.j.error);
+          }})
           .catch(function () {{ say("Could not reach fiscl on this machine."); }});
       }},
       onExit: function () {{ say("Closed without connecting."); }}
@@ -357,13 +428,9 @@ def save_plaid_item(conn: sqlite3.Connection, client: plaid.PlaidClient, data: d
     public_token, institution = parse_plaid_result(data)
     access, item_id = plaid.exchange_public_token(client, public_token)
     ref = connections.item_ref_hash("plaid", item_id)
-    plaid.store_access_token(ref, access)
-    try:
-        connections.add_connection(conn, "plaid", institution, ref)
-        conn.commit()
-    except Exception:
-        base.secret_delete(base.secret_name("plaid", ref))
-        raise
+    _store_then_record(
+        conn, "plaid", ref, access, institution, lambda: client.call("/item/remove", {"access_token": access})
+    )
     return institution
 
 

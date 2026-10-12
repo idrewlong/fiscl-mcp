@@ -177,12 +177,32 @@ _AUDIT_SAFE_KEYS = {
 }
 
 
+# Enum-like keys are logged verbatim only when the value is one of the known choices; free text that was
+# (mis)passed in one of these slots is logged as "<invalid>", never as written.
+_AUDIT_ENUMS: dict[str, frozenset[str]] = {
+    "provider": frozenset({"all", "simplefin", "teller", "plaid"}),
+    "status": frozenset({"active", "price_changed", "missed", "cancelled"}),
+    "kind": frozenset(
+        {"subscription", "bill", "income"}  # list_recurring
+        | {"spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget", "net_worth"}
+        | {"category_trend"}  # show_chart
+        | {"property", "vehicle", "equipment", "investment", "cash", "liability", "other"}  # manage_asset
+    ),
+}
+
+
+def _audit_value(key: str, value: Any) -> Any:
+    if key in _AUDIT_ENUMS:
+        return value if isinstance(value, str) and value in _AUDIT_ENUMS[key] else "<invalid>"
+    return value if key in _AUDIT_SAFE_KEYS else "<set>"
+
+
 def audit(
     cfg: Config, tool: str, args: dict[str, Any], rows: int | None, started: float, error: str | None = None
 ) -> None:
     if not cfg.guard.audit_log:
         return
-    safe_args = {k: (v if k in _AUDIT_SAFE_KEYS else "<set>") for k, v in args.items() if v is not None}
+    safe_args = {k: _audit_value(k, v) for k, v in args.items() if v is not None}
     entry = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "tool": tool,

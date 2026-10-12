@@ -135,7 +135,7 @@ def schedule_c_draft(conn, cfg: Config, year=None, today=None) -> dict:
         span,
     ).fetchone()[0]
     rows = conn.execute(
-        f"""SELECT c.name AS category, c.schedule_c_line AS line, -SUM(t.amount) AS spent, COUNT(*) AS n
+        f"""SELECT c.name AS category, c.schedule_c_line AS line, -SUM(t.amount) AS spent, COUNT(DISTINCT t.id) AS n
             FROM {TXN_FROM}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' AND {SPENDING_FILTER}
             GROUP BY c.id""",

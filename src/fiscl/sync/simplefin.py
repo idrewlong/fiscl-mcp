@@ -75,11 +75,7 @@ def claim(setup_token: str, allowed: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS, op
 
 
 def forget() -> None:
-    kr = _keyring()
-    try:
-        kr.delete_password(KEYRING_SERVICE, KEYRING_USER)
-    except Exception:
-        pass
+    base.secret_delete(KEYRING_USER)  # same keychain check; only "not found" is ignored
 
 
 def is_connected() -> bool:
@@ -104,7 +100,11 @@ def _guess_type(name: str) -> str:
 
 def parse_accounts(payload: dict, tz: ZoneInfo) -> tuple[list[ParsedStatement], list[str]]:
     statements: list[ParsedStatement] = []
-    warnings = [clean_text(str(e), 200) for e in payload.get("errors", [])]
+    # Bridge error text is remote, untrusted prose; only a count reaches warnings (and so the model).
+    errors = payload.get("errors")
+    warnings: list[str] = []
+    if isinstance(errors, list) and errors:
+        warnings.append(f"SimpleFIN reported {len(errors)} connection error(s); check your bridge")
 
     def to_date(epoch) -> str:
         return datetime.fromtimestamp(int(epoch), tz=UTC).astimezone(tz).date().isoformat()
@@ -112,7 +112,7 @@ def parse_accounts(payload: dict, tz: ZoneInfo) -> tuple[list[ParsedStatement], 
     for acct in payload.get("accounts", []):
         currency = str(acct.get("currency", "USD")).upper()
         if len(currency) != 3:
-            warnings.append(f"skipped account with custom currency {currency[:20]!r}")
+            warnings.append("skipped an account with an unsupported currency")
             continue
         txns = []
         for t in acct.get("transactions", []):

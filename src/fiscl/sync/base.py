@@ -67,6 +67,7 @@ def build_opener(context: ssl.SSLContext | None = None) -> urllib.request.Opener
 _OPENER = build_opener()
 
 Opener = Callable[..., Any]
+SSLContext = ssl.SSLContext  # re-exported so no other module needs to import ssl
 
 
 def open_url(req: urllib.request.Request, timeout: float):
@@ -175,7 +176,7 @@ def client_context(cert_pem: str, key_pem: str) -> ssl.SSLContext:
     pem = (cert_pem.strip() + "\n" + key_pem.strip() + "\n").encode()
     if hasattr(os, "memfd_create"):
         try:
-            fd = os.memfd_create("fiscl-mtls", 0)
+            fd = os.memfd_create("fiscl-mtls", os.MFD_CLOEXEC)
         except OSError:
             fd = -1
         if fd >= 0:
@@ -216,15 +217,45 @@ def secret_name(provider: str, ref: str) -> str:
     return f"fiscl:{provider}:{ref}"
 
 
+# Only these backends are real OS credential stores. Everything else (keyrings.alt's plaintext/encrypted-file
+# backends, the null and fail backends, anything chosen through PYTHON_KEYRING_BACKEND or keyringrc.cfg) is refused:
+# a file-backed or silently-dropping store is exactly what fiscl promises never to use for bank credentials.
+OS_KEYCHAIN_BACKENDS = frozenset(
+    {
+        "keyring.backends.macOS.Keyring",
+        "keyring.backends.Windows.WinVaultKeyring",
+        "keyring.backends.SecretService.Keyring",
+        "keyring.backends.libsecret.Keyring",
+        "keyring.backends.kwallet.DBusKeyring",
+        "keyring.backends.kwallet.DBusKeyringKWallet4",
+    }
+)
+_CHAINER = "keyring.backends.chainer.ChainerBackend"
+NO_KEYCHAIN = "no OS keychain is available on this machine; fiscl won't store bank credentials in plain text"
+
+
+def _backend_path(backend: object) -> str:
+    cls = type(backend)
+    return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def is_os_keychain(backend: object) -> bool:
+    """True only for an allowlisted OS backend, or a chainer whose every member is one (exact class match, so a
+    subclass or look-alike elsewhere doesn't count)."""
+    if _backend_path(backend) == _CHAINER:
+        members = list(getattr(backend, "backends", None) or [])
+        return bool(members) and all(is_os_keychain(m) for m in members)
+    return _backend_path(backend) in OS_KEYCHAIN_BACKENDS
+
+
 def keyring_backend():
     """The `keyring` module, but only when a real OS keychain backs it."""
     try:
         import keyring  # optional dependency: pip install "fiscl[sync]"
-        from keyring.backends.fail import Keyring as FailKeyring
     except ImportError as exc:
         raise SyncError('bank sync needs the keyring package: pip install "fiscl[sync]"') from exc
-    if isinstance(keyring.get_keyring(), FailKeyring):
-        raise SyncError("no OS keychain is available on this machine; fiscl won't store bank credentials in plain text")
+    if not is_os_keychain(keyring.get_keyring()):
+        raise SyncError(NO_KEYCHAIN)
     return keyring
 
 
@@ -237,12 +268,15 @@ def secret_get(name: str) -> str | None:
 
 
 def secret_delete(name: str) -> None:
+    """Delete a keychain entry. "Not found" is fine (idempotent); any other keychain error is surfaced, because
+    swallowing it would report a credential as removed while it is still stored."""
+    kr = keyring_backend()
     try:
-        keyring_backend().delete_password(KEYRING_SERVICE, name)
-    except SyncError:
-        raise
-    except Exception:
-        pass  # already gone
+        kr.delete_password(KEYRING_SERVICE, name)
+    except Exception as exc:
+        if type(exc).__name__ == "PasswordDeleteError":  # keyring.errors.PasswordDeleteError: no such entry
+            return
+        raise SyncError("couldn't delete a stored credential from the keychain; nothing was disconnected") from exc
 
 
 # --- protocol ---------------------------------------------------------------------------------

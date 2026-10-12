@@ -21,6 +21,7 @@ from decimal import Decimal, InvalidOperation
 
 from ..config import Config
 from ..guard import clean_text
+from ..importers.core import account_hash
 from ..importers.types import ParsedStatement, ParsedTxn
 from ..money import AmountError, parse_amount
 from . import base
@@ -259,7 +260,7 @@ class PlaidConnector:
         self.item_status: dict[str, str] = {}  # ref -> ok | needs_reauth | error
         self.item_institution: dict[str, str] = {}
         self._cursors: dict[str, str] = {}  # saved by finalize() once the import succeeded
-        self._removed: list[str] = []  # transaction ids to delete locally
+        self._removed: list[tuple[str, list[str]]] = []  # (transaction id, this Item's account hashes) to delete
 
     def _get_client(self) -> PlaidClient:
         if self._client is None:
@@ -311,7 +312,11 @@ class PlaidConnector:
             self._cursors[item.ref] = cursor
         elif not cursor and not (added or modified):
             self.warnings.append("Plaid is still preparing this connection's transactions; sync again in a few minutes")
-        self._removed += [r["transaction_id"] for r in removed if _TXN_ID.fullmatch(str(r.get("transaction_id")))]
+        # A removal may only touch accounts that belong to this Item, whatever ids Plaid sends back.
+        mine = [account_hash(f"{PROVIDER}:{aid}") for aid in accounts]
+        self._removed += [
+            (str(r["transaction_id"]), mine) for r in removed if _TXN_ID.fullmatch(str(r.get("transaction_id")))
+        ]
 
         by_account: dict[str, list[ParsedTxn]] = {k: [] for k in accounts}
         for flag, rows in ((False, added), (True, modified)):
@@ -422,11 +427,15 @@ class PlaidConnector:
     def finalize(self, conn: sqlite3.Connection) -> None:
         """Called only after the import succeeded: delete what Plaid removed (only rows this connector imported,
         never anything the user created) and advance each Item's cursor. Safe to repeat."""
-        for fitid in self._removed:
+        for fitid, hashes in self._removed:
+            if not hashes:
+                continue
+            marks = ",".join("?" * len(hashes))
             conn.execute(
-                """DELETE FROM transactions WHERE fitid = ?
-                   AND import_id IN (SELECT id FROM imports WHERE format = ?)""",
-                (fitid, PROVIDER),
+                f"""DELETE FROM transactions WHERE fitid = ?
+                    AND account_id IN (SELECT id FROM accounts WHERE acct_hash IN ({marks}))
+                    AND import_id IN (SELECT id FROM imports WHERE format = ?)""",
+                (fitid, *hashes, PROVIDER),
             )
         for ref, cursor in self._cursors.items():
             conn.execute(

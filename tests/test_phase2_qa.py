@@ -532,11 +532,10 @@ def test_connect_token_is_not_in_a_404_or_any_error_body():
     assert s.token.encode() not in got
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-1: connect handler has no socket timeout")
 @pytest.mark.parametrize("kind", ["silent", "partial_headers", "body_never_arrives"])
 def test_connect_stalled_client_cannot_hang_the_flow_past_its_deadline(kind):
-    """BUG-1: a client that connects and sends nothing (or stalls mid-request/body) blocks the single-threaded server
-    forever, because the handler has no socket timeout; the 10-minute deadline is never re-checked."""
+    """BUG-1 / SEC-2 (fixed): a client that connects and sends nothing (or stalls mid-request/body) used to block the
+    single-threaded server forever. Handler socket reads are now bounded by the flow's overall deadline."""
     s, _ = _srv()
     stalled = socket.create_connection(("127.0.0.1", s.server_port))
     host = f"127.0.0.1:{s.server_port}"
@@ -714,9 +713,11 @@ def test_scan_src_has_no_forbidden_endpoints_or_account_number_paths():
         "/auth/get",
         "/identity",
         "/verify",
+        "/payees",
     ]
-    hits = [(p.name, b) for p in src.rglob("*.py") for b in bad if b in p.read_text() and p.name != "base.py"]
-    # base.py/teller.py docstrings may *mention* them; routes must not
+    # No file is exempt (route files included): raw text, so even comments and docstrings can't hide a route.
+    # The AST version over string constants lives in tests/test_phase2_fixes.py (SEC-9).
+    hits = [(p.name, b) for p in src.rglob("*.py") for b in bad if b in p.read_text()]
     for rt in list(teller.ROUTES) + list(plaid.ROUTES) + list(plaid.SANDBOX_ROUTES):
         assert not any(b in rt[1] for b in bad)
-    assert [h for h in hits if h[0] not in ("teller.py", "plaid.py", "connect.py", "simplefin.py", "tax.py")] == []
+    assert hits == []

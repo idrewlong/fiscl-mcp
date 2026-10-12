@@ -67,6 +67,10 @@ def add_txn(
     return int(cur.lastrowid)
 
 
+class PasswordDeleteError(Exception):
+    """Same class name as keyring.errors.PasswordDeleteError, which is what a real backend raises for "not found"."""
+
+
 class FakeKeyring:
     """An in-memory stand-in for the OS keychain."""
 
@@ -81,7 +85,7 @@ class FakeKeyring:
 
     def delete_password(self, service, user):
         if (service, user) not in self.items:
-            raise KeyError(user)
+            raise PasswordDeleteError(user)
         del self.items[(service, user)]
 
 

@@ -180,10 +180,13 @@ def list_connections(conn: sqlite3.Connection, cfg: Config, today: date | None =
     }
 
 
-def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: str | None = None, opener=None) -> None:
-    """Revoke at the provider, delete the keychain entries, drop the connection rows."""
+def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: str | None = None, opener=None) -> int:
+    """Revoke at the provider, delete the keychain entries, drop the connection rows. Returns how many
+    connections were revoked; naming an institution that isn't connected is an error, not a silent success."""
     choice(provider, PROVIDERS, "provider")
     rows = connections.list_rows(conn, provider, institution)
+    if institution and not rows:
+        raise GuardError("no connection matched that institution; run `fiscl connect list`.", code="not_found")
     if provider == "simplefin":
         simplefin.forget()
     elif provider == "teller":
@@ -200,3 +203,4 @@ def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: st
             plaid.forget_app_credentials()
     connections.delete_rows(conn, provider, [r["item_ref_hash"] for r in rows])
     conn.commit()
+    return len(rows)

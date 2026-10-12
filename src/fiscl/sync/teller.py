@@ -14,7 +14,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import ssl
 import urllib.parse
 from dataclasses import dataclass
 from datetime import date
@@ -144,7 +143,7 @@ class TellerConnector:
     # -- transport --
     def _get_opener(self):
         if self._opener is None:
-            ctx: ssl.SSLContext | None = None
+            ctx: base.SSLContext | None = None
             if self.environment != "sandbox":
                 cert, key = base.secret_get(_name("cert")), base.secret_get(_name("key"))
                 if not (cert and key):
@@ -292,6 +291,10 @@ class TellerConnector:
         )
 
     # -- forget --
+    def revoke_token(self, token: str) -> None:
+        """Revoke one enrollment's access at Teller (`DELETE /accounts`); used to clean up a failed connect."""
+        self._call("DELETE", token, "/accounts")
+
     def forget(self) -> None:
         """Revoke each enrollment at Teller (`DELETE /accounts`), then remove its token from the keychain.
 

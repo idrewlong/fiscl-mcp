@@ -17,6 +17,8 @@ from .types import ParsedStatement
 
 SUPPORTED = {".csv", ".ofx", ".qfx", ".txt"}
 MAX_FILE_BYTES = 50 * 1024 * 1024
+# balances.source is CHECK-constrained; bank connectors all record as 'sync'.
+BALANCE_SOURCE = {"ofx": "ofx", "simplefin": "sync", "teller": "sync", "plaid": "sync"}
 
 
 class ImportFailed(ValueError):
@@ -49,7 +51,7 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _account_hash(key: str) -> str:
+def account_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
@@ -72,21 +74,34 @@ def parse_file(path: Path, cfg: Config, profile: str | None = None) -> list[Pars
         raise ImportFailed(str(exc)) from exc
 
 
+def _free_name(conn: sqlite3.Connection, name: str) -> str:
+    candidate, n = name, 1
+    while find_account(conn, candidate):
+        n += 1
+        candidate = f"{name} {n}"
+    return candidate
+
+
 def _resolve_account(conn: sqlite3.Connection, stmt: ParsedStatement, account_name: str | None) -> sqlite3.Row:
     name = account_name or stmt.account_name
     if stmt.account_key:
-        acct_hash = _account_hash(stmt.account_key)
+        acct_hash = account_hash(stmt.account_key)
         row = conn.execute("SELECT * FROM accounts WHERE acct_hash = ?", (acct_hash,)).fetchone()
         if row:
             return row
+        new_name = name or f"{stmt.institution or 'Account'} ••{stmt.last4}"
         if name and (row := find_account(conn, name)):
             if row["acct_hash"] is None:
                 conn.execute(
                     "UPDATE accounts SET acct_hash = ?, last4 = COALESCE(last4, ?) WHERE id = ?",
                     (acct_hash, stmt.last4, row["id"]),
                 )
-            return find_account(conn, name)
-        new_name = name or f"{stmt.institution or 'Account'} ••{stmt.last4}"
+                return find_account(conn, name)
+            # The name belongs to an account already bound to a different identity. A display name is bank-supplied
+            # text, never proof of identity, so don't merge: make a separate, clearly labelled account.
+            new_name = _free_name(conn, f"{name} ({stmt.format})")
+        elif find_account(conn, new_name):
+            new_name = _free_name(conn, f"{new_name} ({stmt.format})")
         add_account(
             conn, new_name, stmt.type_hint or "checking", stmt.institution, stmt.currency, acct_hash, stmt.last4
         )
@@ -218,7 +233,7 @@ def _insert_statement(
                 replaced += 1
         else:
             skipped += 1
-    source = "ofx" if stmt.format == "ofx" else "csv"
+    source = BALANCE_SOURCE.get(stmt.format, "csv")
     conn.executemany(
         "INSERT OR REPLACE INTO balances (account_id, as_of, amount, source) VALUES (?, ?, ?, ?)",
         [(account["id"], d, b, source) for d, b in stmt.balances],

@@ -264,8 +264,11 @@ def cmd_connect(cfg, args) -> int:
                 _print(registry.list_connections(conn, cfg))
         elif args.target == "forget":
             with open_db(cfg) as conn:
-                registry.forget(conn, cfg, args.provider, args.institution)
-            print(f"Disconnected {args.provider}" + (f" ({args.institution})" if args.institution else "") + ".")
+                revoked = registry.forget(conn, cfg, args.provider, args.institution)
+            if args.institution:
+                print(f"Disconnected {revoked} {args.provider} connection(s) matching that institution.")
+            else:
+                print(f"Disconnected {args.provider}.")
         else:
             base.keyring_backend()  # refuse before asking for anything
             if args.target == "plaid":
@@ -289,7 +292,7 @@ def cmd_connect(cfg, args) -> int:
                     ref = connections.item_ref_hash("simplefin", "access_url")
                     connections.add_connection(conn, "simplefin", "SimpleFIN Bridge", ref)
                 print(f"Connected to {host}. The access credential is stored in your OS keychain.")
-    except SyncError as exc:
+    except (SyncError, GuardError) as exc:
         print(f"connect error: {exc}", file=sys.stderr)
         return 1
     return 0
