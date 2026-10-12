@@ -17,7 +17,14 @@ MAX_RANGE_DAYS = 3660  # ~10 years
 
 
 class GuardError(ValueError):
-    """Bad input from a tool call. The message is safe to show the model."""
+    """Bad input from a tool call. The message is safe to show the model (it is redacted on the way out).
+
+    `code` is a stable, data-free label; it is the only part of an error that reaches the audit log.
+    """
+
+    def __init__(self, message: str = "", code: str = "invalid") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # --- untrusted text -----------------------------------------------------------------
@@ -73,7 +80,7 @@ def redact(obj: Any) -> Any:
     if isinstance(obj, str):
         return redact_text(obj)
     if isinstance(obj, dict):
-        return {k: redact(v) for k, v in obj.items()}
+        return {(redact_text(k) if isinstance(k, str) else k): redact(v) for k, v in obj.items()}
     if isinstance(obj, list | tuple):
         return [redact(v) for v in obj]
     return obj
@@ -123,7 +130,7 @@ def choice(value: str, allowed: tuple[str, ...], field: str) -> str:
 def clamp_limit(limit: int | None, cfg: Config) -> int:
     if limit is None:
         return cfg.guard.max_rows_default
-    if not isinstance(limit, int) or limit < 1:
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
         raise GuardError("limit must be a positive integer")
     return min(limit, cfg.guard.max_rows_hard)
 

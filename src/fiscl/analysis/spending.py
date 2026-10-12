@@ -181,7 +181,9 @@ def merchant_history(conn, cfg: Config, merchant: str, months=12, today=None) ->
         (name,),
     ).fetchone()
     if not seen["n"]:
-        raise GuardError(f"no spending found for merchant {name!r}; check the spelling with query_transactions")
+        raise GuardError(
+            f"no spending found for merchant {name!r}; check the spelling with query_transactions", code="not_found"
+        )
     rows = conn.execute(
         f"""SELECT substr(t.posted_date, 1, 7) AS ym, -SUM(t.amount) AS spent, COUNT(DISTINCT t.id) AS n
             FROM {TXN_FROM}
@@ -260,7 +262,7 @@ def category_trend(conn, cfg: Config, category: str, months=12, scope="all", tod
     row = conn.execute("SELECT name FROM categories WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
     if row is None and name.lower() != "uncategorized":
         names = [r[0] for r in conn.execute("SELECT name FROM categories WHERE kind = 'expense' ORDER BY name")]
-        raise GuardError(f"unknown category {name!r}. Expense categories: {', '.join(names)}")
+        raise GuardError(f"unknown category {name!r}. Expense categories: {', '.join(names)}", code="not_found")
     name = row["name"] if row else "Uncategorized"
     f_sql, f_params = txn_filter(None, scope)
     rows = conn.execute(

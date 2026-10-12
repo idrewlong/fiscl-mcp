@@ -1,6 +1,7 @@
 """Security hardening: redirects never carry credentials, the chart view can't run injected markup,
 private file modes, and local-only checks."""
 
+import json
 import os
 import stat
 import threading
@@ -130,3 +131,73 @@ def test_refuses_to_use_the_home_directory_itself(tmp_path, monkeypatch):
 )
 def test_cloud_sync_folder_warning(path, synced):
     assert (cli.cloud_sync_warning(Path(path).expanduser()) is not None) == synced
+
+
+# --- audit log carries no error text (SEC-1) --------------------------------------------------
+
+
+async def test_failed_calls_leave_no_names_or_amounts_in_audit_log(cfg):
+    from mcp import Client
+
+    from fiscl.db import connect
+    from fiscl.server import build_server
+
+    from .conftest import add_txn
+
+    c0 = connect(cfg)
+    from fiscl.db import add_account
+
+    acct = add_account(c0, "Checking", "checking")
+    t = add_txn(c0, acct, "2026-10-05", -12345, "ZEBRA CAFE", "Dining")
+    c0.commit()
+    c0.close()
+    calls = [
+        ("merchant_history", {"merchant": "ZEBRAQQ UNKNOWN"}),
+        (
+            "split_transaction",
+            {
+                "transaction_id": t,
+                "parts": [{"amount": -50, "category": "Dining"}, {"amount": -50, "category": "Groceries"}],
+            },
+        ),
+        ("manage_asset", {"action": "update", "name": "Secret Boat Fund", "value": 5}),
+        ("manage_goal", {"action": "update", "name": "Hidden Goal Name"}),
+    ]
+    async with Client(build_server(cfg)) as c:
+        for name, args in calls:
+            try:
+                await c.call_tool(name, args)
+            except Exception:  # noqa: BLE001, S110 - tool errors surface as exceptions
+                pass
+    log = (cfg.logs / "audit.log").read_text()
+    assert log.strip(), "audit log should have entries"
+    for leak in ("ZEBRA", "Secret Boat", "Hidden Goal", "$", "123.45", "100.00"):
+        assert leak not in log, leak
+    assert "not_found" in log and "sum_mismatch" in log
+
+
+async def test_tool_error_text_is_redacted_for_the_model(cfg):
+    from mcp import Client
+
+    from fiscl.server import build_server
+
+    async with Client(build_server(cfg)) as c:
+        r = await c.call_tool("merchant_history", {"merchant": "4111111111111111"})
+    assert r.is_error
+    text = json.dumps([getattr(x, "text", "") for x in r.content], ensure_ascii=False)
+    assert "4111111111111111" not in text and "••••1111" in text
+
+
+def test_backup_file_is_private_even_if_original_is_loose(tmp_path):
+    from fiscl.config import backup_file
+
+    src = tmp_path / "budgets.toml"
+    src.write_text("x = 1\n")
+    os.chmod(src, 0o644)
+    backup_file(src)
+    bak = tmp_path / "budgets.toml.bak"
+    assert bak.read_text() == "x = 1\n"
+    assert stat.S_IMODE(bak.stat().st_mode) == 0o600
+    os.chmod(bak, 0o666)  # an existing loose .bak is tightened on the next backup
+    backup_file(src)
+    assert stat.S_IMODE(bak.stat().st_mode) == 0o600

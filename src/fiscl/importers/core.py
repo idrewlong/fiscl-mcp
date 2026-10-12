@@ -33,6 +33,8 @@ class ImportResult:
     rows_added: int = 0
     rows_skipped: int = 0
     pending_replaced: int = 0
+    edits_carried: int = 0  # pending rows whose splits/tags/note/category/scope moved to the posted row
+    edits_dropped: int = 0  # pending rows whose split no longer matched the posted amount and was dropped
     error: str | None = None
 
     def as_dict(self) -> dict:
@@ -97,10 +99,45 @@ def _resolve_account(conn: sqlite3.Connection, stmt: ParsedStatement, account_na
     return row
 
 
+def _carry_edits(conn: sqlite3.Connection, pend: sqlite3.Row, new_id: int, amount: int) -> tuple[int, int]:
+    """Move the user's edits from a pending row to the posted row that replaces it.
+
+    Returns (carried, dropped): 1 if anything moved, 1 if a split was dropped because its parts no longer sum to
+    the posted amount (never keep an invalid split silently).
+    """
+    carried = dropped = 0
+    split_total = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM splits WHERE transaction_id = ?", (pend["id"],)
+    ).fetchone()
+    if split_total[0]:
+        if split_total[1] == amount:
+            conn.execute("UPDATE splits SET transaction_id = ? WHERE transaction_id = ?", (new_id, pend["id"]))
+            carried = 1
+        else:
+            dropped = 1  # the pending row's cascade removes the stale split
+    tags = conn.execute(
+        "INSERT OR IGNORE INTO tags (transaction_id, tag) SELECT ?, tag FROM tags WHERE transaction_id = ?",
+        (new_id, pend["id"]),
+    )
+    if tags.rowcount > 0:
+        carried = 1
+    manual = pend["category_id"] is not None and pend["category_source"] == "manual"
+    if manual or pend["note"] is not None or pend["scope"] is not None:
+        conn.execute(
+            """UPDATE transactions SET note = COALESCE(note, ?), scope = COALESCE(scope, ?),
+                 category_id = CASE WHEN ? THEN ? ELSE category_id END,
+                 category_source = CASE WHEN ? THEN 'manual' ELSE category_source END
+               WHERE id = ?""",
+            (pend["note"], pend["scope"], manual, pend["category_id"], manual, new_id),
+        )
+        carried = 1
+    return carried, dropped
+
+
 def _insert_statement(
     conn: sqlite3.Connection, stmt: ParsedStatement, account: sqlite3.Row, import_id: int, aliases
-) -> tuple[int, int, int]:
-    added = skipped = replaced = 0
+) -> tuple[int, int, int, int, int]:
+    added = skipped = replaced = carried = dropped = 0
     occurrences: dict[tuple, int] = {}
     for t in stmt.txns:
         merchant = normalize_merchant(t.description, aliases)
@@ -112,17 +149,16 @@ def _insert_statement(
             ident = (t.posted_date, t.amount, t.description.lower(), t.pending)
             occurrences[ident] = occurrences.get(ident, 0) + 1
             key = ("p:" if t.pending else "") + _dedupe_key(t.posted_date, t.amount, t.description, occurrences[ident])
+        pend = None
         if not t.pending:
             # A posted row replaces a matching pending row from up to 7 days earlier.
             start = (date.fromisoformat(t.posted_date) - timedelta(days=7)).isoformat()
             pend = conn.execute(
-                """SELECT id FROM transactions WHERE account_id = ? AND is_pending = 1 AND amount = ?
+                """SELECT id, note, category_id, category_source, scope FROM transactions
+                   WHERE account_id = ? AND is_pending = 1 AND amount = ?
                    AND lower(merchant) = lower(?) AND posted_date BETWEEN ? AND ? ORDER BY posted_date LIMIT 1""",
                 (account["id"], t.amount, merchant, start, t.posted_date),
             ).fetchone()
-            if pend:
-                conn.execute("DELETE FROM transactions WHERE id = ?", (pend["id"],))
-                replaced += 1
         cur = conn.execute(
             """INSERT OR IGNORE INTO transactions
                (account_id, posted_date, amount, currency, raw_description, merchant, memo,
@@ -144,6 +180,12 @@ def _insert_statement(
         )
         if cur.rowcount:
             added += 1
+            if pend:
+                c, d = _carry_edits(conn, pend, int(cur.lastrowid), t.amount)
+                carried += c
+                dropped += d
+                conn.execute("DELETE FROM transactions WHERE id = ?", (pend["id"],))
+                replaced += 1
         else:
             skipped += 1
     source = "ofx" if stmt.format == "ofx" else "csv"
@@ -151,7 +193,7 @@ def _insert_statement(
         "INSERT OR REPLACE INTO balances (account_id, as_of, amount, source) VALUES (?, ?, ?, ?)",
         [(account["id"], d, b, source) for d, b in stmt.balances],
     )
-    return added, skipped, replaced
+    return added, skipped, replaced, carried, dropped
 
 
 def import_file(
@@ -206,11 +248,13 @@ def import_statements(
             account = _resolve_account(conn, stmt, account_name)
             account_id = account["id"]
             result.accounts.append(account["name"])
-            added, skipped, replaced = _insert_statement(conn, stmt, account, import_id, aliases)
+            added, skipped, replaced, carried, dropped = _insert_statement(conn, stmt, account, import_id, aliases)
             result.rows_seen += len(stmt.txns)
             result.rows_added += added
             result.rows_skipped += skipped
             result.pending_replaced += replaced
+            result.edits_carried += carried
+            result.edits_dropped += dropped
         conn.execute(
             "UPDATE imports SET account_id = ?, rows_seen = ?, rows_added = ?, rows_skipped = ? WHERE id = ?",
             (account_id, result.rows_seen, result.rows_added, result.rows_skipped, import_id),

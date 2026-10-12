@@ -17,6 +17,7 @@ from ..common import (
     plan_result,
     resolve_target,
     target_of,
+    valid_id,
     without_split_parents,
 )
 from ..config import Config
@@ -74,14 +75,13 @@ def _with_meta(conn, cfg: Config, result: dict) -> dict:
 
 
 def _transaction(conn, transaction_id) -> dict:
-    if not isinstance(transaction_id, int) or isinstance(transaction_id, bool):
-        raise GuardError("transaction_id must be an integer")
+    valid_id(transaction_id)
     row = conn.execute(
         "SELECT id, posted_date, merchant, amount, currency, transfer_group, note FROM transactions WHERE id = ?",
         (transaction_id,),
     ).fetchone()
     if row is None:
-        raise GuardError(f"no transaction with id {transaction_id}")
+        raise GuardError(f"no transaction with id {transaction_id}", code="not_found")
     return dict(row)
 
 
@@ -254,7 +254,8 @@ def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
     if total != parent["amount"]:
         raise GuardError(
             f"parts sum to {amount(total, cfg.currency)['display']} but the transaction is "
-            f"{amount(parent['amount'], cfg.currency)['display']}; they must match exactly"
+            f"{amount(parent['amount'], cfg.currency)['display']}; they must match exactly",
+            code="sum_mismatch",
         )
     return out
 

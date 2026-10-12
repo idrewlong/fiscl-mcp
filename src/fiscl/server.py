@@ -64,8 +64,9 @@ def build_server(cfg: Config) -> MCPServer:
             audit(cfg, name, kwargs, _count_rows(result), started)
             return result
         except (GuardError, ConfigError) as exc:
-            audit(cfg, name, kwargs, None, started, error=str(exc))
-            raise ToolError(str(exc)) from exc
+            # The audit log gets only a stable code: messages can quote merchants, asset names, and amounts.
+            audit(cfg, name, kwargs, None, started, error=getattr(exc, "code", type(exc).__name__))
+            raise ToolError(redact(str(exc))) from exc
         except Exception as exc:
             log.exception("tool %s failed", name)
             audit(cfg, name, kwargs, None, started, error=type(exc).__name__)

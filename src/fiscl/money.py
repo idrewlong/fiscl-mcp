@@ -16,6 +16,17 @@ class AmountError(ValueError):
     pass
 
 
+MAX_MAJOR = Decimal(10**12)  # $1 trillion: anything larger is a typo or an attack, not money
+
+
+def _check_range(d: Decimal, original: object) -> Decimal:
+    if not d.is_finite():
+        raise AmountError(f"not a finite number: {original!r}")
+    if abs(d) > MAX_MAJOR:
+        raise AmountError("amount is too large")
+    return d
+
+
 def _scale(currency: str) -> int:
     return 1 if currency.upper() in ZERO_DECIMAL else 100
 
@@ -59,6 +70,7 @@ def parse_amount(text: str, currency: str = "USD") -> int:
         value = Decimal(s)
     except InvalidOperation as exc:
         raise AmountError(f"unparseable amount: {text!r}") from exc
+    _check_range(value, text)
     minor = int((value * _scale(currency)).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
     return -minor if neg else minor
 
@@ -71,6 +83,7 @@ def to_minor(value: int | float | str | Decimal, currency: str = "USD") -> int:
         d = Decimal(str(value))
     except InvalidOperation as exc:
         raise AmountError(f"not a number: {value!r}") from exc
+    _check_range(d, value)
     return int((d * _scale(currency)).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
 
 

@@ -72,3 +72,33 @@ def test_safe_regex_rejects_catastrophic_patterns():
     with pytest.raises(GuardError):
         safe_regex("x" * 300)
     assert safe_regex("netflix|hulu").search("NETFLIX.COM")
+
+
+def test_clamp_limit_rejects_bools(cfg):
+    import pytest
+
+    from fiscl.guard import GuardError, clamp_limit
+
+    for bad in (True, False, 0, -1, "5"):
+        with pytest.raises(GuardError):
+            clamp_limit(bad, cfg)
+    assert clamp_limit(5, cfg) == 5
+
+
+def test_amount_parsers_reject_non_finite_and_huge():
+    import pytest
+
+    from fiscl.money import AmountError, parse_amount, to_minor
+
+    for bad in ("NaN", "Infinity", "1e400", 10**30, float("inf"), "1000000000001"):
+        with pytest.raises(AmountError):
+            to_minor(bad)
+    with pytest.raises(AmountError):
+        parse_amount("9" * 20)
+    assert to_minor("1000000000000") == 10**14
+
+
+def test_guard_error_has_default_code():
+    from fiscl.guard import GuardError
+
+    assert GuardError("x").code == "invalid" and GuardError("x", code="not_found").code == "not_found"

@@ -102,7 +102,7 @@ def manage_asset(
 
     if action == "add":
         if row is not None:
-            raise GuardError(f"{row['name']!r} already exists; use action=update")
+            raise GuardError("an asset with that name already exists; use action=update", code="exists")
         if kind is None or value_minor is None:
             raise GuardError("kind and value are required to add an asset")
         after = {
@@ -115,8 +115,7 @@ def manage_asset(
         before = None
     else:
         if row is None:
-            names = [r[0] for r in conn.execute("SELECT name FROM manual_assets ORDER BY name")]
-            raise GuardError(f"no manual asset named {name!r}. Existing: {', '.join(names) or 'none'}")
+            raise GuardError("no manual asset with that name; list them with net_worth", code="not_found")
         before = dict(row)
         after = None
         if action == "update":
@@ -193,7 +192,7 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
         balances[a["id"]] = minor
         last = _last_data_day(conn, a["id"], snapshot, on)
         if (on - date.fromisoformat(last)).days > STALE_DAYS:
-            stale.append(f"{a['name']} (data through {last})")
+            stale.append({"account": a["name"], "data_through": last})
         row = {"name": a["name"], "type": a["type"], "source": "account", "as_of": last}
         # Signed as the bank reports it: a negative card or loan balance is money owed.
         if minor >= 0:
@@ -250,9 +249,13 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
     if on != today:
         assumptions.append("Manual assets use their current values, not their value on the chosen date.")
     if missing:
-        assumptions.append(f"No balance on file for: {', '.join(missing)}. They are left out of the totals.")
+        assumptions.append(
+            "Some accounts have no balance on file and are left out of the totals (see missing_balances)."
+        )
     if stale:
-        assumptions.append(f"Balances more than {STALE_DAYS} days old: {', '.join(stale)}. Import fresh data.")
+        assumptions.append(
+            f"Some balances are more than {STALE_DAYS} days old (see stale_balances). Import fresh data."
+        )
     return {
         "as_of": on.isoformat(),
         "assets": assets,
@@ -262,6 +265,8 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
         "net_worth": amount(total_assets - total_liabilities, cfg.currency),
         "change_vs": change_vs,
         "assumptions": assumptions,
+        "missing_balances": missing,
+        "stale_balances": stale,
         "meta": meta(conn, cfg, row_count=len(assets) + len(liabilities)),
     }
 
@@ -371,7 +376,7 @@ def _percent(value, where: str) -> Decimal:
     return apr
 
 
-def _debts_from_args(conn, cfg: Config, debts) -> tuple[list[dict], list[str]]:
+def _debts_from_args(conn, cfg: Config, debts) -> tuple[list[dict], list[str], list[dict]]:
     check_items(debts)
     if len(debts) > MAX_DEBTS:
         raise GuardError(f"at most {MAX_DEBTS} debts")
@@ -382,7 +387,7 @@ def _debts_from_args(conn, cfg: Config, debts) -> tuple[list[dict], list[str]]:
             raise GuardError(f"{where}: use {{name, balance, apr, min_payment}}")
         name = _name(item.get("name"), f"{where} name")
         if name.lower() in seen:
-            raise GuardError(f"{where}: {name!r} is listed twice")
+            raise GuardError(f"{where}: this name is already listed")
         seen.add(name.lower())
         terms = cfg.debts.get(name.lower())
         balance = money_arg(item.get("balance"), cfg, f"{where} balance")
@@ -391,39 +396,39 @@ def _debts_from_args(conn, cfg: Config, debts) -> tuple[list[dict], list[str]]:
             rolled = rolled_balance(conn, acct["id"]) if acct else None
             if rolled is not None and rolled[0] < 0:
                 balance = -rolled[0]
-                notes.append(f"{name}: balance taken from the account ({amount(balance, cfg.currency)['display']}).")
+                notes.append(f"debt {i}: balance taken from the account of the same name.")
         apr = _percent(item["apr"], where) if item.get("apr") is not None else None
         minimum = money_arg(item.get("min_payment"), cfg, f"{where} min_payment")
         if apr is None and terms:
             apr = Decimal(terms.apr_pct)
-            notes.append(f"{name}: APR from config.toml [debts].")
+            notes.append(f"debt {i}: APR from config.toml [debts].")
         if minimum is None and terms:
             minimum = terms.min_payment
-            notes.append(f"{name}: minimum payment from config.toml [debts].")
+            notes.append(f"debt {i}: minimum payment from config.toml [debts].")
         missing = [k for k, v in (("balance", balance), ("apr", apr), ("min_payment", minimum)) if v is None]
         if missing:
-            raise GuardError(f"{where} ({name}): missing {', '.join(missing)}. fiscl never guesses these.")
+            raise GuardError(f"{where}: missing {', '.join(missing)}. fiscl never guesses these.")
         if balance <= 0:
-            raise GuardError(f"{where} ({name}): balance must be greater than 0")
+            raise GuardError(f"{where}: balance must be greater than 0")
         if minimum <= 0:
-            raise GuardError(f"{where} ({name}): min_payment must be greater than 0")
+            raise GuardError(f"{where}: min_payment must be greater than 0")
         out.append({"name": name, "balance": balance, "apr": apr, "min": minimum})
-    return out, notes
+    return out, notes, []
 
 
-def _debts_from_accounts(conn, cfg: Config) -> tuple[list[dict], list[str]]:
+def _debts_from_accounts(conn, cfg: Config) -> tuple[list[dict], list[str], list[dict]]:
     rows = conn.execute(
         "SELECT id, name FROM accounts WHERE archived = 0 AND type IN (?, ?) ORDER BY name",
         DEBT_TYPES,
     ).fetchall()
-    out, notes, lacking = [], [], []
+    out, notes, lacking, left_out = [], [], [], []
     for a in rows:
         rolled = rolled_balance(conn, a["id"])
         if rolled is None:
-            notes.append(f"{a['name']}: no balance on file, left out.")
+            left_out.append({"account": a["name"], "reason": "no balance on file"})
             continue
         if rolled[0] >= 0:
-            notes.append(f"{a['name']}: nothing owed, left out.")
+            left_out.append({"account": a["name"], "reason": "nothing owed"})
             continue
         terms = cfg.debts.get(a["name"].lower())
         if terms is None:
@@ -431,18 +436,21 @@ def _debts_from_accounts(conn, cfg: Config) -> tuple[list[dict], list[str]]:
             continue
         out.append({"name": a["name"], "balance": -rolled[0], "apr": Decimal(terms.apr_pct), "min": terms.min_payment})
     if lacking:
-        example = lacking[0]
         raise GuardError(
-            f"APR and minimum payment are needed for: {', '.join(lacking)}. Bank exports don't carry them and fiscl "
-            f'never guesses. Pass debts=[{{name, balance, apr, min_payment}}] or add [debts."{example}"] with apr and '
-            "min_payment to config.toml."
+            f"APR and minimum payment are needed for {len(lacking)} credit or loan account(s) (list_accounts shows "
+            "them). Bank exports don't carry these and fiscl never guesses. Pass "
+            'debts=[{name, balance, apr, min_payment}] or add a [debts."<account name>"] table with apr and '
+            "min_payment to config.toml.",
+            code="needs_terms",
         )
     if not out:
         raise GuardError(
             "no credit or loan account with a balance owed. Pass debts=[{name, balance, apr, min_payment}] to model "
             "debts that aren't imported."
         )
-    return out, notes
+    if left_out:
+        notes.append(f"{len(left_out)} account(s) were left out (see accounts_left_out).")
+    return out, notes, left_out
 
 
 def _simulate(debts: list[dict], order_key, extra: int, cfg: Config, today: date) -> dict:
@@ -529,9 +537,9 @@ def debt_payoff(conn, cfg: Config, extra_monthly=0, strategy="both", debts=None,
     if extra < 0:
         raise GuardError("extra_monthly can't be negative")
     if debts is None:
-        items, notes = _debts_from_accounts(conn, cfg)
+        items, notes, left_out = _debts_from_accounts(conn, cfg)
     else:
-        items, notes = _debts_from_args(conn, cfg, debts)
+        items, notes, left_out = _debts_from_args(conn, cfg, debts)
     orders = {
         "avalanche": lambda d: (-d["apr"], d["balance"], d["name"].lower()),
         "snowball": lambda d: (d["balance"], -d["apr"], d["name"].lower()),
@@ -554,6 +562,7 @@ def debt_payoff(conn, cfg: Config, extra_monthly=0, strategy="both", debts=None,
             for d in items
         ],
         "strategies": results,
+        "accounts_left_out": left_out,
     }
     if strategy == "both":
         a, s = results["avalanche"], results["snowball"]
@@ -625,7 +634,9 @@ def manage_goal(
 
     if action == "add":
         if row is not None:
-            raise GuardError(f"goal {row['name']!r} already exists" + (" (archived)" if row["archived"] else ""))
+            raise GuardError(
+                "a goal with that name already exists" + (" (archived)" if row["archived"] else ""), code="exists"
+            )
         if target_minor is None:
             raise GuardError("target is required to add a goal")
         after = {
@@ -639,8 +650,7 @@ def manage_goal(
         before = None
     else:
         if row is None:
-            names = [r[0] for r in conn.execute("SELECT name FROM goals ORDER BY name")]
-            raise GuardError(f"no goal named {name!r}. Goals: {', '.join(names) or 'none'}")
+            raise GuardError("no goal with that name; list goals with goal_progress", code="not_found")
         before = dict(row)
         after = dict(row)
         if action == "archive":
@@ -709,7 +719,7 @@ def _goal_progress_row(conn, cfg: Config, g: sqlite3.Row, today: date) -> dict:
         now = rolled_balance(conn, g["account_id"])
         current = now[0] if now else None
         if now is None:
-            notes.append(f"No balance on file for {account_name}.")
+            notes.append("The tracked account has no balance on file.")
         else:
             then_day = today - timedelta(days=90)
             first = _first_data_day(conn, g["account_id"])
@@ -772,8 +782,7 @@ def goal_progress(conn, cfg: Config, name=None, today=None) -> dict:
             "SELECT * FROM goals WHERE name = ? COLLATE NOCASE", (clean_text(str(name), 200),)
         ).fetchall()
         if not goals:
-            names = [r[0] for r in conn.execute("SELECT name FROM goals WHERE archived = 0 ORDER BY name")]
-            raise GuardError(f"no goal named {name!r}. Goals: {', '.join(names) or 'none'}")
+            raise GuardError("no goal with that name; list goals with goal_progress", code="not_found")
     else:
         goals = conn.execute("SELECT * FROM goals WHERE archived = 0 ORDER BY name").fetchall()
     rows = [_goal_progress_row(conn, cfg, g, today) for g in goals]

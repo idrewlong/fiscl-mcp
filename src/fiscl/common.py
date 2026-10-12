@@ -12,6 +12,7 @@ from .db import SCOPE_SQL
 from .guard import GuardError, choice, clean_text
 from .money import AmountError, to_minor
 
+MAX_SQLITE_INT = 2**63 - 1
 MAX_BULK_ROWS = 500
 MAX_EDIT_ITEMS = 100
 MAX_TAG_LEN = 40
@@ -50,6 +51,15 @@ def money_arg(value, cfg: Config, field: str) -> int | None:
         return to_minor(value, cfg.currency)
     except AmountError as exc:
         raise GuardError(f"{field}: {exc}") from exc
+
+
+def valid_id(value, field: str = "transaction_id") -> int:
+    """A positive integer that fits SQLite's signed 64-bit INTEGER (bigger raises OverflowError in sqlite3)."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise GuardError(f"{field} must be an integer")
+    if not 1 <= value <= MAX_SQLITE_INT:
+        raise GuardError(f"{field} is out of range", code="not_found")
+    return value
 
 
 def account_id(conn, name: str | None) -> int | None:
@@ -127,6 +137,8 @@ def resolve_target(conn, item: dict, i: int) -> tuple[str | None, list[int] | No
     else:
         if not isinstance(ids, list) or not all(isinstance(x, int) and not isinstance(x, bool) for x in ids):
             raise GuardError(f"item {i}: transaction_ids must be a list of integers")
+        if not all(1 <= x <= MAX_SQLITE_INT for x in ids):
+            raise GuardError(f"item {i}: transaction_ids out of range")
         if len(ids) > MAX_BULK_ROWS:
             raise GuardError(f"item {i}: at most {MAX_BULK_ROWS} transaction_ids")
         rows = conn.execute(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tomllib
 from dataclasses import dataclass, field
@@ -324,8 +325,11 @@ def load_budgets(cfg: Config) -> list[Budget]:
 
 
 def backup_file(path: Path) -> None:
+    """Copy `path` to `path.bak` with private permissions, whatever the original's mode is."""
     if path.exists():
-        shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+        bak = path.with_suffix(path.suffix + ".bak")
+        shutil.copyfile(path, bak)
+        os.chmod(bak, FILE_MODE)
 
 
 def append_toml_block(path: Path, block: str, tool: str) -> None:
@@ -342,6 +346,10 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)  # JSON strings with \uXXXX escapes are valid TOML basic strings
 
 
+_BUDGET_HEADER = re.compile(r"^\s*\[\[\s*budget\s*\]\]\s*(#.*)?$")
+_ANY_HEADER = re.compile(r"^\s*\[")
+
+
 def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") -> None:
     """Rewrite only the [[budget]] blocks of budgets.toml.
 
@@ -355,12 +363,18 @@ def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") 
     in_budget = False
     for line in original.splitlines():
         stripped = line.strip()
-        if stripped == "[[budget]]":
+        if _BUDGET_HEADER.match(line):
             in_budget = True
-        elif stripped.startswith("["):
+            continue  # the header is rewritten along with the block
+        if _ANY_HEADER.match(line):
             in_budget = False
-        if not in_budget and not stripped.startswith("# updated by "):
-            kept.append(line)
+        if stripped.startswith("# updated by "):
+            continue
+        if in_budget and stripped and not stripped.startswith("#"):
+            continue  # one of the block's own key lines; comments and blank lines stay where they are
+        if not stripped and kept and not kept[-1].strip():
+            continue  # collapse blank runs left behind by removed blocks
+        kept.append(line)
     while kept and not kept[-1].strip():
         kept.pop()
     scale = 1 if cfg.currency in ("JPY", "KRW") else 100
@@ -380,6 +394,9 @@ def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") 
             (b.category, b.monthly, b.rollover) for b in sorted(budgets, key=lambda b: b.category.lower())
         ]:
             raise ConfigError("budgets.toml did not round-trip")
-    except ConfigError:
+    except ConfigError as exc:
         _write_private(path, original)
-        raise
+        raise ConfigError(
+            "budgets.toml couldn't be rewritten safely, so it was left unchanged (a backup is budgets.toml.bak). "
+            "Check it for hand-edits inside the [[budget]] entries, such as multi-line values."
+        ) from exc

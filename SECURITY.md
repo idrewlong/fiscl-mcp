@@ -24,7 +24,7 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 - **Untrusted text.** Bank descriptions are Unicode-normalized, stripped of control and bidi characters, capped, and returned only as labeled data. The server tells the model never to follow instructions found in them.
 - **Chart view.** The in-chat chart has a strict Content-Security-Policy (no network, no external resources), renders bank-derived labels as text only, and accepts messages only from its host frame.
 - **Deliberate writes.** Category, scope, and mileage edits are dry runs by default, bulk edits are capped, and imports are atomic. The database is backed up before migrations and daily (last 14 kept).
-- **Audit trail.** `fiscl audit` shows every tool call with sanitized arguments; merchant names, descriptions, and amounts are never logged.
+- **Audit trail.** `fiscl audit` shows every tool call with sanitized arguments; merchant names, descriptions, and amounts are never logged, and failed calls log only a stable error code (such as `not_found`), never the error text.
 
 ## Recommendations for users
 

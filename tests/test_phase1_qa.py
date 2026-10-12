@@ -1,7 +1,6 @@
 """QA edge-case tests for v2 Phase 1 (edits, planning, monitoring, guardrails across the MCP surface).
 
-Tests marked xfail(strict=True) document confirmed bugs (BUG-n in the QA report). They flip to failures
-(XPASS) once the bug is fixed, so the marker must then be removed.
+BUG-n references point at the QA report; all the former xfail regressions now pass.
 """
 
 from __future__ import annotations
@@ -98,9 +97,6 @@ def _post(conn, cfg):
     return import_statements(conn, cfg, [posted], "q", "d2", account_name="Checking")
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-1: pending->posted import deletes the pending row; splits/tags/note cascade away"
-)
 def test_pending_to_posted_keeps_splits_tags_and_notes(conn, cfg, accounts):
     tid = _pend_then_post(conn, cfg)
     analysis.add_note(conn, cfg, transaction_id=tid, note="team lunch", dry_run=False)
@@ -114,13 +110,40 @@ def test_pending_to_posted_keeps_splits_tags_and_notes(conn, cfg, accounts):
     assert conn.execute("SELECT COUNT(*) FROM tags WHERE transaction_id = ?", (row["id"],)).fetchone()[0] == 1
 
 
-def test_pending_to_posted_current_behaviour_loses_user_edits_silently(conn, cfg, accounts):
-    """Characterization of BUG-1 (kept green so a behaviour change is noticed)."""
+def test_pending_to_posted_reports_carried_edits(conn, cfg, accounts):
     tid = _pend_then_post(conn, cfg)
     analysis.tag_transactions(conn, cfg, [{"transaction_ids": [tid], "add": ["x"]}], dry_run=False)
     r = _post(conn, cfg)
-    assert r.pending_replaced == 1
-    assert conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0
+    assert (r.pending_replaced, r.edits_carried, r.edits_dropped) == (1, 1, 0)
+    assert conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1
+
+
+def test_pending_to_posted_carries_manual_category_and_scope(conn, cfg, accounts):
+    tid = _pend_then_post(conn, cfg)
+    analysis.apply_categories(conn, cfg, [{"transaction_ids": [tid], "category": "Dining"}], dry_run=False)
+    conn.execute("UPDATE transactions SET scope = 'business' WHERE id = ?", (tid,))
+    assert _post(conn, cfg).edits_carried == 1
+    row = conn.execute(
+        "SELECT c.name, t.category_source, t.scope FROM transactions t JOIN categories c ON c.id = t.category_id"
+    ).fetchone()
+    assert tuple(row) == ("Dining", "manual", "business")
+
+
+def test_pending_to_posted_drops_split_that_no_longer_sums(conn, cfg, accounts):
+    from fiscl.importers.core import _carry_edits
+
+    tid = _pend_then_post(conn, cfg)
+    parts = [{"amount": -70, "category": "Dining"}, {"amount": -50, "category": "Groceries"}]
+    analysis.split_transaction(conn, cfg, transaction_id=tid, parts=parts, dry_run=False)
+    pend = conn.execute("SELECT * FROM transactions WHERE id = ?", (tid,)).fetchone()
+    new_id = conn.execute(
+        "INSERT INTO transactions (account_id, posted_date, amount, currency, raw_description, merchant, "
+        "is_pending, dedupe_key) VALUES (?, '2026-10-06', -13000, 'USD', 'X', 'X', 0, 'k')",
+        (pend["account_id"],),
+    ).lastrowid
+    assert _carry_edits(conn, pend, new_id, -13000) == (0, 1)
+    assert conn.execute("SELECT COUNT(*) FROM splits WHERE transaction_id = ?", (new_id,)).fetchone()[0] == 0
 
 
 # --- set_budget on hand-edited TOML --------------------------------------------------------
@@ -141,9 +164,6 @@ rollover = true
 """
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-2: comments between/after [[budget]] blocks and '[[budget]] # c' headers break set_budget"
-)
 def test_set_budget_preserves_comments_between_blocks_and_handles_commented_headers(conn, cfg):
     cfg.budgets_file.write_text(HAND, encoding="utf-8")
     analysis.set_budget(conn, cfg, [{"category": "Groceries", "monthly": 600}], dry_run=False)
@@ -177,9 +197,6 @@ def test_set_budget_odd_spacing_and_other_tables_survive(conn, cfg):
 # --- hostile / odd input on the real MCP surface ------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="BUG-3: NaN/Infinity/1e400 money args raise InvalidOperation/ValueError, not GuardError"
-)
 @pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "1e400", "sNaN"])
 def test_non_finite_money_args_are_guard_errors(conn, cfg, bad):
     from fiscl.common import money_arg
@@ -188,7 +205,6 @@ def test_non_finite_money_args_are_guard_errors(conn, cfg, bad):
         money_arg(bad, cfg, "amount")
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-3: astronomically large money args overflow instead of a GuardError")
 def test_huge_money_arg_is_guard_error(conn, cfg):
     from fiscl.common import money_arg
 
@@ -196,7 +212,6 @@ def test_huge_money_arg_is_guard_error(conn, cfg):
         money_arg(10**30, cfg, "amount")
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-4: transaction ids beyond int64 raise OverflowError (generic tool error)")
 def test_huge_transaction_id_is_guard_error(conn, cfg, accounts):
     with pytest.raises(GuardError):
         analysis.add_note(conn, cfg, transaction_id=10**30, note="x")
@@ -387,7 +402,6 @@ async def test_new_tools_redact_card_and_ssn_in_responses(cfg, conn, accounts):
         assert SSN not in res.contents[0].text
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-5: guard.redact masks dict values but not dict keys (tags_after, payments)")
 def test_redact_masks_dict_keys_too():
     from fiscl.guard import redact
 
@@ -558,3 +572,28 @@ def test_tag_filter_is_case_insensitive_and_unicode_safe(conn, cfg, accounts):
         r = analysis.query_transactions(conn, cfg, from_="2026-10-01", tag=q, today=TODAY)
         assert [x["id"] for x in r["transactions"]] == [t], q
     assert analysis.query_transactions(conn, cfg, from_="2026-10-01", tag="nope", today=TODAY)["transactions"] == []
+
+
+def test_set_budget_header_variants_and_round_trip_failure_is_clear(conn, cfg):
+    cfg.budgets_file.write_text(
+        '[[ budget ]]\ncategory = "Dining"\nmonthly = 5\n\n# between\n'
+        '[[budget]] # c\ncategory = "Auto: Fuel"\nmonthly = 6\n',
+        encoding="utf-8",
+    )
+    analysis.set_budget(conn, cfg, [{"category": "Dining", "monthly": 9}], dry_run=False)
+    text = cfg.budgets_file.read_text()
+    assert "# between" in text
+    assert sorted((b.category, b.monthly) for b in load_budgets(cfg)) == [("Auto: Fuel", 600), ("Dining", 900)]
+    # repeated writes don't pile up blank lines
+    analysis.set_budget(conn, cfg, [{"category": "Dining", "monthly": 9}], dry_run=False)
+    assert "\n\n\n" not in cfg.budgets_file.read_text()
+
+
+def test_set_budget_unrewritable_file_is_restored_with_clear_error(conn, cfg):
+    from fiscl.config import ConfigError
+
+    original = '[[budget]]\ncategory = "Dining"\nmonthly = [\n  5,\n]\n'
+    cfg.budgets_file.write_text(original, encoding="utf-8")
+    with pytest.raises(ConfigError):
+        analysis.set_budget(conn, cfg, [{"category": "Groceries", "monthly": 6}], dry_run=False)
+    assert cfg.budgets_file.read_text() == original
