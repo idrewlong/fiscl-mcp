@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import errno
 import io
 import os
 import re
@@ -129,16 +130,16 @@ def test_pre_existing_symlink_file_is_not_followed(conn, cfg, seeded, tmp_path):
 
 @posix
 def test_failed_write_leaves_no_partial_files(conn, cfg, seeded, monkeypatch):
-    real_replace = os.replace
+    real_link = os.link
     calls = []
 
-    def flaky(src, dst):
+    def flaky(src, dst, **kw):
         calls.append(dst)
         if len(calls) == 2:
-            raise OSError("disk full")
-        return real_replace(src, dst)
+            raise OSError(errno.ENOSPC, "disk full")
+        return real_link(src, dst, **kw)
 
-    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr(os, "link", flaky)
     with pytest.raises(OSError):
         export(conn, cfg, dry_run=False)
     assert files_on_disk(cfg) == []
@@ -215,7 +216,7 @@ def test_markdown_escapes_bank_text(conn, cfg, accounts):
     conn.commit()
     r = export(conn, cfg, formats=["markdown"], dry_run=False)
     text = (cfg.home / r["files"][0]["path"]).read_text(encoding="utf-8")
-    assert r"\[click\]\(http://x\)" in text
+    assert r"\[click\]\(http\://x\)" in text  # `://` is backslash-escaped so it can't auto-link
     body = "\n".join(line for line in text.splitlines() if not line.startswith("> "))  # blockquote markers are ours
     assert "<" not in text and ">" not in body
     assert "&lt;script&gt;" in text

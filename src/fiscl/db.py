@@ -386,10 +386,20 @@ def migrate(conn: sqlite3.Connection, cfg: Config) -> None:
         return
     if current > 0:
         backup(conn, cfg, reason="pre-migration")
+    conn.commit()
     for version in range(current, target):
-        conn.executescript(MIGRATIONS[version])
-        conn.execute("DELETE FROM schema_version")
-        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version + 1,))
+        # One transaction per migration, including the version bump: a failure part-way rolls everything back
+        # instead of leaving half the script applied. (SQLite DDL is transactional.)
+        script = (
+            f"BEGIN;\n{MIGRATIONS[version]}\nDELETE FROM schema_version;\n"
+            f"INSERT INTO schema_version (version) VALUES ({int(version) + 1});\nCOMMIT;"
+        )
+        try:
+            conn.executescript(script)
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
     if current == 0:
         conn.executemany("INSERT OR IGNORE INTO categories (name, kind) VALUES (?, ?)", DEFAULT_CATEGORIES)
     conn.commit()

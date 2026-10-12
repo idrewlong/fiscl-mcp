@@ -6,9 +6,9 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from .config import Config, append_toml_block, load_rules_raw, toml_string
+from .config import Config, ConfigError, append_toml_block, load_rules_raw, toml_string
 from .db import get_or_create_category
-from .guard import GuardError, safe_regex
+from .guard import GuardError, clean_text, safe_regex
 from .money import AmountError, to_minor
 
 MATCHERS = {"merchant", "description_regex", "account", "amount_gt", "amount_lt", "amount_eq", "day_of_month"}
@@ -25,6 +25,8 @@ class Rule:
     amount_lt: int | None = None
     amount_eq: int | None = None
     day_of_month: int | None = None
+    business: str | None = None  # not a matcher: the business assigned to rows this rule categorizes
+    business_id: int | None = None  # resolved against `businesses` by apply_rules
 
     def matches(self, txn: dict) -> bool:
         if self.merchant is not None and (txn.get("merchant") or "").lower() != self.merchant.lower():
@@ -49,15 +51,18 @@ def load_rules(cfg: Config) -> list[Rule]:
     for i, r in enumerate(raw.get("rule", []), start=1):
         if not isinstance(r, dict) or "category" not in r:
             raise GuardError(f"rules.toml rule {i} needs a category")
-        unknown = set(r) - MATCHERS - {"category"}
+        unknown = set(r) - MATCHERS - {"category", "business"}
         if unknown:
             raise GuardError(f"rules.toml rule {i}: unknown keys {sorted(unknown)}")
         if not set(r) & MATCHERS:
             raise GuardError(f"rules.toml rule {i}: needs at least one matcher")
+        if "business" in r and (not isinstance(r["business"], str) or not r["business"].strip()):
+            raise GuardError(f"rules.toml rule {i}: business must be a business name")
         try:
             rule = Rule(
                 index=i,
                 category=str(r["category"]),
+                business=r["business"].strip() if "business" in r else None,
                 merchant=r.get("merchant"),
                 description_regex=safe_regex(r["description_regex"]) if "description_regex" in r else None,
                 account=r.get("account"),
@@ -72,6 +77,19 @@ def load_rules(cfg: Config) -> list[Rule]:
     return rules
 
 
+def resolve_businesses(conn: sqlite3.Connection, rules: list[Rule]) -> None:
+    """Resolve each rule's `business` name to an active business id. The error names the rule index, never the name."""
+    for rule in rules:
+        if rule.business is None:
+            continue
+        row = conn.execute(
+            "SELECT id, archived FROM businesses WHERE name = ?", (clean_text(rule.business, 1000),)
+        ).fetchone()
+        if row is None or row["archived"]:
+            raise ConfigError(f"rules.toml rule {rule.index}: business isn't an active business")
+        rule.business_id = row["id"]
+
+
 def first_match(rules: list[Rule], txn: dict) -> Rule | None:
     return next((r for r in rules if r.matches(txn)), None)
 
@@ -80,10 +98,11 @@ def apply_rules(conn: sqlite3.Connection, cfg: Config, recategorize: bool = Fals
     """Categorize by rules. Default touches only uncategorized rows; `recategorize` also redoes
     rule-assigned rows. Manual and transfer categorizations are never changed."""
     rules = load_rules(cfg)
+    resolve_businesses(conn, rules)
     sources = ("none", "rule") if recategorize else ("none",)
     rows = conn.execute(
         f"""SELECT t.id, t.merchant, t.raw_description, t.amount, t.posted_date, t.category_id,
-                   a.name AS account_name
+                   t.business_id, a.name AS account_name
             FROM transactions t JOIN accounts a ON a.id = t.account_id
             WHERE t.category_source IN ({",".join("?" * len(sources))}) AND t.transfer_group IS NULL""",
         sources,
@@ -95,6 +114,9 @@ def apply_rules(conn: sqlite3.Connection, cfg: Config, recategorize: bool = Fals
         if rule is None:
             continue
         cat_id = get_or_create_category(conn, rule.category) if not dry_run else None
+        # A rule's business only fills an empty business_id; anything already set (manually) is kept.
+        if not dry_run and rule.business_id is not None and row["business_id"] is None:
+            conn.execute("UPDATE transactions SET business_id = ? WHERE id = ?", (rule.business_id, row["id"]))
         if not dry_run and cat_id == row["category_id"]:
             continue
         changes[rule.category] = changes.get(rule.category, 0) + 1

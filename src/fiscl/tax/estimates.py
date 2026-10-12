@@ -164,7 +164,9 @@ def estimated_tax(
         rate = Decimal(str(rate_raw)) if rate_raw is not None else None
     except Exception as exc:
         raise GuardError("income_tax_rate_pct and w2_wages must be numbers") from exc
-    if rate is not None and not 0 <= rate <= 60:
+    if w2 < 0:
+        raise GuardError("w2_wages can't be negative", code="invalid")
+    if rate is not None and (not rate.is_finite() or not 0 <= rate <= 60):
         raise GuardError("income_tax_rate_pct must be between 0 and 60")
 
     # Self-employment tax (Schedule SE): 92.35% of net profit; 12.4% Social Security up to the wage base

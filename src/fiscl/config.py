@@ -372,7 +372,7 @@ def load_config(home: Path | None = None) -> Config:
             tax.ss_wage_base[int(k)] = int(v)
         if tax_raw.get("income_tax_rate_pct") is not None:
             rate = Decimal(str(tax_raw["income_tax_rate_pct"]))
-            if not 0 <= rate <= 60:
+            if not rate.is_finite() or not 0 <= rate <= 60:
                 raise ConfigError("tax.income_tax_rate_pct must be between 0 and 60")
             tax.income_tax_rate_pct = str(rate)
         tax.state = _load_state(tax_raw.get("state"))
@@ -380,7 +380,8 @@ def load_config(home: Path | None = None) -> Config:
             state_rate = tax_raw["state_income_tax_rate_pct"]
             if isinstance(state_rate, bool) or not isinstance(state_rate, int | float):
                 raise ConfigError("tax.state_income_tax_rate_pct must be a number between 0 and 20")
-            if not 0 <= Decimal(str(state_rate)) <= 20:
+            state_dec = Decimal(str(state_rate))
+            if not state_dec.is_finite() or not 0 <= state_dec <= 20:
                 raise ConfigError("tax.state_income_tax_rate_pct must be a number between 0 and 20")
             tax.state_income_tax_rate_pct = str(Decimal(str(state_rate)))
         tax.home_office = _load_home_office(tax_raw.get("home_office", {}))

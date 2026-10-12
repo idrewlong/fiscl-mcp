@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import errno
 import io
 import os
 import re
@@ -19,7 +20,7 @@ from pathlib import Path
 from ..common import meta, year_bounds
 from ..config import DIR_MODE, FILE_MODE, Config
 from ..db import BUSINESS_SQL, SCOPE_SQL, TXN_FROM
-from ..guard import GuardError, choice, clean_text
+from ..guard import GuardError, choice, clean_text, redact_text
 from ..money import ZERO_DECIMAL, amount
 from .businesses import businesses_for_period, get_business
 from .lines import DISCLAIMER, SCHEDULE_C_LINES, line_for
@@ -57,19 +58,29 @@ NOT_PRIVATE = "the exports folder isn't a private directory inside your data fol
 
 
 def csv_cell(value: object) -> str:
-    """Bank-derived text for a CSV cell: cleaned, and defanged if a spreadsheet would read it as a formula."""
-    text = clean_text(None if value is None else str(value))
+    """Bank-derived text for a CSV cell: cleaned, scrubbed of card/SSN/long account-like numbers, and defanged if a
+    spreadsheet would read it as a formula."""
+    text = redact_text(clean_text(None if value is None else str(value)))
     return "'" + text if text.startswith(_FORMULA_STARTS) else text
 
 
 _MD_ESCAPES = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 _MD_PUNCT = re.compile(r"[&<>\\`*_\[\](){}#|!~]")
+_MD_SCHEME = re.compile(r"(?<=[A-Za-z])://")
+_MD_WWW = re.compile(r"\b(www)\.", re.IGNORECASE)
+
+
+def md_escape(text: str) -> str:
+    """Markdown-escape already-clean text: no raw HTML, no links (including bare URLs), no emphasis."""
+    text = _MD_PUNCT.sub(lambda m: _MD_ESCAPES.get(m.group(), "\\" + m.group()), text)
+    # GFM auto-links bare `scheme://` and `www.` text; a backslash escape keeps it readable but not clickable.
+    text = _MD_SCHEME.sub(r"\\://", text)
+    return _MD_WWW.sub(r"\1\\.", text)
 
 
 def md_text(value: object) -> str:
-    """Bank-derived text for Markdown: no raw HTML, no links or emphasis, one line."""
-    text = clean_text(None if value is None else str(value))
-    return _MD_PUNCT.sub(lambda m: _MD_ESCAPES.get(m.group(), "\\" + m.group()), text)
+    """Bank-derived text for Markdown: cleaned, scrubbed of card/SSN/account-like numbers, one line, not clickable."""
+    return md_escape(redact_text(clean_text(None if value is None else str(value))))
 
 
 def plain(minor: int, currency: str) -> str:
@@ -185,7 +196,7 @@ def to_csv(columns: tuple[str, ...], text_cols: set[str], rows: list[dict]) -> b
 
 def to_markdown(draft: dict, cur: str) -> bytes:
     def money(a: dict) -> str:
-        return md_text(a["display"])
+        return md_escape(a["display"])  # amounts are not scrubbed
 
     def table(head: tuple[str, ...], body: list[tuple]) -> list[str]:
         out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
@@ -273,8 +284,14 @@ def exports_dir(cfg: Config, create: bool) -> Path:
     return d
 
 
+_NO_HARDLINK_ERRNOS = {
+    getattr(errno, n) for n in ("EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK", "EXDEV") if hasattr(errno, n)
+}
+
+
 def write_all(directory: Path, files: list[tuple[str, bytes]]) -> None:
-    """Write every file or none: temp files opened O_EXCL|O_NOFOLLOW (0600), then renamed into place."""
+    """Write every file or none: temp files opened O_EXCL|O_NOFOLLOW (0600), then published with a hard link, which
+    fails instead of replacing a file that appeared meanwhile."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     made: list[Path] = []
     exists = GuardError("an export with that name already exists; try again in a second", code="exists")
@@ -291,10 +308,27 @@ def write_all(directory: Path, files: list[tuple[str, bytes]]) -> None:
             made.append(tmp)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
-        for name, _ in files:
-            os.replace(directory / (name + ".tmp"), directory / name)
-            made.remove(directory / (name + ".tmp"))
-            made.append(directory / name)
+        for name, data in files:
+            tmp, final = directory / (name + ".tmp"), directory / name
+            try:
+                os.link(tmp, final, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise exists from exc
+            except (OSError, NotImplementedError) as exc:
+                if isinstance(exc, OSError) and exc.errno not in _NO_HARDLINK_ERRNOS:
+                    raise
+                # no hard links on this filesystem: create the final name directly, still exclusively
+                try:
+                    fd = os.open(final, flags, FILE_MODE)
+                except FileExistsError as exc:
+                    raise exists from exc
+                made.append(final)
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+            else:
+                made.append(final)
+            tmp.unlink()
+            made.remove(tmp)
     except BaseException:
         for p in made:
             with contextlib.suppress(OSError):

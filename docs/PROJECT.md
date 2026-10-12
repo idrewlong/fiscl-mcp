@@ -279,6 +279,11 @@ Everything here is framed as **organizing records for you and your tax preparer*
   - per-quarter amount, 1040-ES due dates (2026: Apr 15, Jun 15, Sep 15, Jan 15 2027), and set-aside %
   - notes cover safe-harbor rules and what's ignored (Additional Medicare, QBI, credits)
   - SS wage base defaults: 2025 $176,100, 2026 $184,500 (verify yearly)
+- **Phase 3 additions (implemented):**
+  - schema migrations 7 (`forms_1099`) and 8 (`businesses` plus nullable `business_id` on accounts, transactions, splits, and 1099 forms; NULL means the default business); each migration now runs in its own transaction with the version bump
+  - state estimated tax at planning depth: a static 50 states + DC schedule of installment dates and percentages (next business day applied in code, `verified=False` rows surface a note), plus your own planning rate; no bracket engine
+  - 1099 records you type in, reconciled against business income with thresholds looked up by payment year
+  - several businesses, one Schedule C each, with self-employment tax computed once on the combined profit
 - **v2:**
   - Schedule C CSV/PDF export for the preparer
   - home office (simplified method)
@@ -329,12 +334,24 @@ All tools return structured content, with money as `{ "minor": -4523, "display":
 | `refund_tracker` | Refunds received and refunds still expected (`refund-pending` tag) | No |
 | `merchant_history` · `category_trend` | Monthly history and trend direction | No |
 
-Still planned: `holdings`, `export_report`, `export_schedule_c`, bank connectors (see `specs/2026-10-11-1948-v2-roadmap.md`).
+Still planned: `holdings`, `export_report`, bank connectors (see `specs/2026-10-11-1948-v2-roadmap.md`).
+
+### 12.2b Tools (v2 Phase 3, implemented)
+
+| Tool | Purpose | Writes? |
+|------|---------|---------|
+| `export_schedule_c` | Preparer-ready Schedule C files (summary CSV, Markdown, optional detail CSV) under `<data dir>/exports/`, one set per business with activity; never overwrites, text cells scrubbed of card/SSN/account-like numbers | Local files (dry run default) |
+| `record_1099` | Add, update, or remove 1099 forms you received (typed in, never fetched) | Local (dry run default) |
+| `reconcile_1099` | Compare recorded 1099 amounts with business-scope income by merchant, as questions; thresholds by payment year | No |
+| `manage_business` | Add, rename, or archive a business (the default business can be renamed, never archived) | Local (dry run default) |
+| `list_businesses` | Businesses with their accounts and the year's gross receipts and spending | No |
+
+The optional `business` argument (a name from `list_businesses`) is accepted by `set_scope` items, `split_transaction` parts, `schedule_c_draft`, `review_writeoffs`, `reconcile_1099`, `record_1099` items, and `export_schedule_c`. `estimated_tax` also takes `state` and `state_income_tax_rate_pct`. A `rules.toml` rule may carry `business = "Name"`; it fills an empty business on the rows the rule categorizes and never overrides a manual assignment.
 
 ### 12.3 Resources
 
 v1: `fiscl://accounts`, `fiscl://categories`, `fiscl://rules`, `fiscl://budgets`, `fiscl://summary/current-month`, `ui://fiscl/chart.html`.
-v2 (done): `fiscl://goals`, `fiscl://recurring`. Planned: `fiscl://tax/{year}`.
+v2 (done): `fiscl://goals`, `fiscl://recurring`, `fiscl://tax/{year}` (the year's Schedule C draft, estimated tax, and 1099 reconciliation payload for a 4-digit year).
 
 ### 12.4 Prompts
 

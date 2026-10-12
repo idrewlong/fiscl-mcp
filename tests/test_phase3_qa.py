@@ -159,10 +159,6 @@ def test_se_tax_with_w2_wages_just_under_the_2026_wage_base(conn, cfg, accounts)
     assert e["self_employment_tax"]["minor"] == 375_305
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-3: negative w2_wages is accepted and pushes Social Security tax above the wage-base cap",
-)
 def test_negative_w2_wages_cannot_raise_social_security_above_the_cap(conn, cfg, accounts):
     # 2025 profit $250,000 -> net earnings 2,308,750 x ... well above the $176,100 base. W-2 wages below zero make no
     # sense; they must be rejected (or treated as 0), never lift the SS-taxable amount above the base.
@@ -318,11 +314,6 @@ def test_state_rate_boundaries_accepted(conn, cfg, accounts):
         tax.estimated_tax(conn, cfg, year=2026, state="CA", state_income_tax_rate_pct=rate, today=TODAY)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-2: state_income_tax_rate_pct = nan raises ConfigError with the text "
-    "'[<class decimal.InvalidOperation>]' instead of the range message (Decimal('nan') <= 20 raises first)",
-)
 def test_nan_state_rate_in_config_gets_the_range_message(cfg):
     from fiscl.config import ConfigError
 
@@ -642,11 +633,6 @@ def test_hostile_text_in_merchants_categories_and_business_names(conn, cfg):
             assert not re.search(r"^# Heading", text, re.M)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-1: md_text() escapes brackets/parens/pipes but not bare URLs; GFM renderers auto-link http(s):// and "
-    "www. text in category and business names, which the spec says must not become links",
-)
 def test_markdown_bare_urls_are_not_left_clickable(conn, cfg, accounts):
     # Merchants never reach the Markdown (only category and business names do), so use a category name.
     add_txn(conn, accounts["biz"], "2026-03-01", -1_000, "Zoom", category="Business: http://evil.example/x")
