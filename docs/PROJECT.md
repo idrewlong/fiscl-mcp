@@ -443,7 +443,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [x] Schedule C export (CSV + Markdown; PDF later)
 - [x] Home office (simplified)
 - [x] 1099 reconciliation
-- [ ] Multiple businesses
+- [x] Multiple businesses (per-transaction; one Schedule C each)
 - [x] State estimates (planning depth: due dates, your own rate)
 - [ ] Receipts
 

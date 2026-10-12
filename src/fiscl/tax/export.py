@@ -18,14 +18,14 @@ from pathlib import Path
 
 from ..common import meta, year_bounds
 from ..config import DIR_MODE, FILE_MODE, Config
-from ..db import SCOPE_SQL, TXN_FROM
+from ..db import BUSINESS_SQL, SCOPE_SQL, TXN_FROM
 from ..guard import GuardError, choice, clean_text
-from ..money import ZERO_DECIMAL
+from ..money import ZERO_DECIMAL, amount
+from .businesses import businesses_for_period, get_business
 from .lines import DISCLAIMER, SCHEDULE_C_LINES, line_for
 from .schedule_c import schedule_c_draft
 
 FORMATS = ("csv", "markdown")
-DEFAULT_BUSINESS_ID = 1  # becomes a real id when multiple businesses land (slice D)
 
 SUMMARY_COLUMNS = ("section", "line", "line_name", "category", "amount", "full_amount", "count", "note")
 SUMMARY_TEXT = {"line_name", "category", "note"}
@@ -108,6 +108,8 @@ def summary_rows(draft: dict, cur: str) -> list[dict]:
     def money(a: dict) -> str:
         return plain(a["minor"], cur)
 
+    if "business" in draft:
+        add("business", note=draft["business"]["name"])
     add("gross_receipts", "1", SCHEDULE_C_LINES["1"], amt=money(draft["gross_receipts"]))
     for entry in draft["expenses_by_line"]:
         line, name = entry["line"], entry["name"]
@@ -126,6 +128,8 @@ def summary_rows(draft: dict, cur: str) -> list[dict]:
     ho = draft["home_office"]
     if ho:
         note = f"Simplified method, {ho['allowable_square_feet']} sq ft at {ho['rate_per_sqft']['display']}"
+        if "home_square_feet" in ho:
+            note += f"; this business's share of a {ho['home_square_feet']} sq ft home office"
         if ho["limited_to_profit"]:
             note += "; limited to business profit"
         add("home_office", "30", "Expenses for business use of your home", amt=money(ho["line_30"]), note=note)
@@ -139,15 +143,18 @@ def summary_rows(draft: dict, cur: str) -> list[dict]:
     return rows
 
 
-def detail_rows(conn, cfg: Config, start: date, end: date) -> list[dict]:
+def detail_rows(conn, cfg: Config, start: date, end: date, business_id: int | None = None) -> list[dict]:
+    """Business-scope lines in the year; `business_id` restricts to one business and fills the business column."""
     redact = cfg.guard.redact_descriptions
+    biz_sql, biz_params = (f"AND {BUSINESS_SQL} = ?", (business_id,)) if business_id is not None else ("", ())
     found = conn.execute(
         f"""SELECT t.posted_date, a.name AS account, t.merchant, t.amount, c.name AS category,
-                   c.schedule_c_line AS line, {SCOPE_SQL} AS scope, t.note, t.id AS txn_id, t.split_id
-            FROM {TXN_FROM}
-            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business'
+                   c.schedule_c_line AS line, {SCOPE_SQL} AS scope, t.note, t.id AS txn_id, t.split_id,
+                   b.name AS business
+            FROM {TXN_FROM} LEFT JOIN businesses b ON b.id = {BUSINESS_SQL}
+            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {biz_sql}
             ORDER BY t.posted_date, t.id, t.split_id""",
-        (start.isoformat(), end.isoformat()),
+        (start.isoformat(), end.isoformat(), *biz_params),
     ).fetchall()
     return [
         {
@@ -158,7 +165,7 @@ def detail_rows(conn, cfg: Config, start: date, end: date) -> list[dict]:
             "category": r["category"] or "Uncategorized",
             "line": line_for(r["category"], r["line"]) or "",
             "scope": r["scope"],
-            "business": "",  # filled in once businesses exist (slice D)
+            "business": r["business"] if business_id is not None else "",  # blank with a single business
             "note": "" if redact else r["note"],
             "transaction_id": r["txn_id"],
             "split_id": r["split_id"] if r["split_id"] is not None else "",
@@ -199,6 +206,7 @@ def to_markdown(draft: dict, cur: str) -> bytes:
         "",
         f"> {DISCLAIMER}",
         "",
+        *([f"Business: {md_text(draft['business']['name'])}", ""] if "business" in draft else []),
         f"Data through: {md_text(_freshness(draft))}",
         "",
         "## Summary",
@@ -223,6 +231,24 @@ def to_markdown(draft: dict, cur: str) -> bytes:
     lines += ["## Notes", ""]
     lines += [f"- {md_text(n)}" for n in draft["notes"][1:]] + ["", FOOTER, ""]
     return "\n".join(lines).encode("utf-8")
+
+
+EXPORT_NAME = re.compile(r"^schedule-c-(\d{4})-b\d+-(\d{8}T\d{6})(?:-detail)?\.(?:csv|md)$")
+
+
+def existing_exports(cfg: Config, year: int, limit: int = 10) -> list[str]:
+    """Relative paths of export files for `year`, newest first. Names only: nothing is opened or read."""
+    try:
+        directory = exports_dir(cfg, create=False)
+        names = os.listdir(directory)
+    except (GuardError, OSError):
+        return []
+    found = []
+    for name in names:
+        m = EXPORT_NAME.match(name)
+        if m and int(m.group(1)) == year:
+            found.append((m.group(2), name))
+    return [f"exports/{name}" for _, name in sorted(found, reverse=True)[:limit]]
 
 
 # --- safe writing --------------------------------------------------------------------------
@@ -288,8 +314,11 @@ def export_schedule_c(
     dry_run=True,
     today=None,
     now=None,
+    business=None,
 ) -> dict:
-    """Plan (default) or write the Schedule C export files for `year`. Never overwrites, never leaves the data dir."""
+    """Plan (default) or write the Schedule C export files for `year`. Never overwrites, never leaves the data dir.
+
+    With several businesses, one file set per business that has activity (or just `business`)."""
     today = today or date.today()
     year, start, end = year_bounds(year, today)
     if formats is None:
@@ -298,18 +327,43 @@ def export_schedule_c(
         raise GuardError("formats must be a non-empty list: csv, markdown")
     formats = [f for f in FORMATS if f in {choice(x, FORMATS, "formats") for x in formats}]
     cur = cfg.currency
-    draft = schedule_c_draft(conn, cfg, year, today)
-    stem = f"schedule-c-{year}-b{DEFAULT_BUSINESS_ID}-{(now or datetime.now()).strftime('%Y%m%dT%H%M%S')}"
+    stamp = (now or datetime.now()).strftime("%Y%m%dT%H%M%S")
+
+    # (business id, draft, shown): `shown` is False only for the plain single-business case, whose files and
+    # response keep their original shape. Otherwise each targeted business gets its own file set.
+    targets: list[tuple[int, dict, bool]]
+    if business is not None:
+        biz = get_business(conn, business)
+        targets = [(biz["id"], schedule_c_draft(conn, cfg, year, today, business=business), True)]
+    else:
+        covered = businesses_for_period(conn, start, end)
+        if len(covered) == 1:
+            targets = [(covered[0]["id"], schedule_c_draft(conn, cfg, year, today), False)]
+        else:
+            active = {
+                r[0]
+                for r in conn.execute(
+                    f"""SELECT DISTINCT {BUSINESS_SQL} FROM {TXN_FROM}
+                        WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business'""",
+                    (start.isoformat(), end.isoformat()),
+                )
+            }
+            chosen = [r for r in covered if r["id"] in active] or covered[:1]
+            targets = [(r["id"], schedule_c_draft(conn, cfg, year, today, business=r["name"]), True) for r in chosen]
 
     planned: list[tuple[str, str, bytes, int | None]] = []  # name, kind, content, rows
-    if "csv" in formats:
-        rows = summary_rows(draft, cur)
-        planned.append((f"{stem}.csv", "summary_csv", to_csv(SUMMARY_COLUMNS, SUMMARY_TEXT, rows), len(rows)))
-    if "markdown" in formats:
-        planned.append((f"{stem}.md", "markdown", to_markdown(draft, cur), None))
-    if include_transactions:
-        detail = detail_rows(conn, cfg, start, end)
-        planned.append((f"{stem}-detail.csv", "detail_csv", to_csv(DETAIL_COLUMNS, DETAIL_TEXT, detail), len(detail)))
+    for biz_id, draft, shown in targets:
+        stem = f"schedule-c-{year}-b{biz_id}-{stamp}"
+        if "csv" in formats:
+            rows = summary_rows(draft, cur)
+            planned.append((f"{stem}.csv", "summary_csv", to_csv(SUMMARY_COLUMNS, SUMMARY_TEXT, rows), len(rows)))
+        if "markdown" in formats:
+            planned.append((f"{stem}.md", "markdown", to_markdown(draft, cur), None))
+        if include_transactions:
+            detail = detail_rows(conn, cfg, start, end, biz_id if shown else None)
+            planned.append(
+                (f"{stem}-detail.csv", "detail_csv", to_csv(DETAIL_COLUMNS, DETAIL_TEXT, detail), len(detail))
+            )
 
     directory = exports_dir(cfg, create=not dry_run)
     if not dry_run:
@@ -324,17 +378,33 @@ def export_schedule_c(
     notes = [DISCLAIMER, KEEP_NOTE]
     if include_transactions and cfg.guard.redact_descriptions:
         notes.append("redact_descriptions is on, so the merchant and note columns in the detail CSV are empty.")
+    drafts = [d for _, d, _ in targets]
+    if len(drafts) == 1:
+        summary = {k: drafts[0][k] for k in ("gross_receipts", "total_expenses", "net_profit")}
+    else:  # several businesses: the combined figures; by_business has each one
+        summary = {
+            k: amount(sum(d[k]["minor"] for d in drafts), cur)
+            for k in ("gross_receipts", "total_expenses", "net_profit")
+        }
     result = {
         "dry_run": bool(dry_run),
         "files": files,
-        "summary": {
-            "gross_receipts": draft["gross_receipts"],
-            "total_expenses": draft["total_expenses"],
-            "net_profit": draft["net_profit"],
-        },
+        "summary": summary,
         "next_step": "Call again with dry_run=false to write these files." if dry_run else "Applied.",
         "notes": notes,
     }
+    if any(shown for _, _, shown in targets):
+        result["by_business"] = [
+            {
+                "business": d["business"],
+                "summary": {k: d[k] for k in ("gross_receipts", "total_expenses", "net_profit")},
+            }
+            for _, d, _ in targets
+        ]
+        notes.append(
+            "One file set per business (the -bN- part of each name is the business id). Self-employment tax is "
+            "figured on the combined profit of all your businesses."
+        )
     if not dry_run:
         result["written"] = True
         result["data_dir_relative"] = True

@@ -247,7 +247,44 @@ MIGRATIONS: list[str] = [
     );
     CREATE UNIQUE INDEX ux_forms_1099 ON forms_1099 (tax_year, form, payer COLLATE NOCASE);
     """,
+    # 8 — v2 phase 3: several businesses. NULL business_id means "the account's business, else the default (id 1)",
+    # so existing rows need no backfill and single-business output stays identical. txn_lines gains the effective
+    # transaction/split business. forms_1099 uniqueness now includes the business.
+    # Down: restore the pre-migration backup. (SQLite 3.35+ can DROP COLUMN business_id, but first recreate txn_lines
+    # from migration 3's definition, DROP INDEX ux_forms_1099_biz ix_txn_business, and recreate ux_forms_1099.)
+    """
+    CREATE TABLE businesses (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        archived   INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    INSERT INTO businesses (id, name, created_at) VALUES (1, 'My business', datetime('now'));
+    ALTER TABLE accounts     ADD COLUMN business_id INTEGER REFERENCES businesses(id);
+    ALTER TABLE transactions ADD COLUMN business_id INTEGER REFERENCES businesses(id);
+    ALTER TABLE splits       ADD COLUMN business_id INTEGER REFERENCES businesses(id);
+    ALTER TABLE forms_1099   ADD COLUMN business_id INTEGER REFERENCES businesses(id);
+    DROP INDEX ux_forms_1099;
+    CREATE UNIQUE INDEX ux_forms_1099_biz
+        ON forms_1099 (tax_year, form, payer COLLATE NOCASE, COALESCE(business_id, 1));
+    CREATE INDEX ix_txn_business ON transactions(business_id);
+    DROP VIEW txn_lines;
+    CREATE VIEW txn_lines AS
+    SELECT t.id AS id, NULL AS split_id, t.account_id, t.posted_date, t.amount, t.currency,
+           t.raw_description, t.merchant, t.memo, t.category_id, t.category_source, t.scope,
+           t.transfer_group, t.is_pending, t.note, t.import_id, t.business_id
+      FROM transactions t
+     WHERE NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)
+    UNION ALL
+    SELECT t.id, s.id, t.account_id, t.posted_date, s.amount, t.currency,
+           t.raw_description, t.merchant, t.memo, s.category_id, 'manual', COALESCE(s.scope, t.scope),
+           t.transfer_group, t.is_pending, COALESCE(s.note, t.note), t.import_id,
+           COALESCE(s.business_id, t.business_id)
+      FROM splits s JOIN transactions t ON t.id = s.transaction_id;
+    """,
 ]
+
+DEFAULT_BUSINESS_ID = 1
 
 # The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).
 # SCOPE_SQL, SPENDING_FILTER and INCOME_FILTER rely on the t/a/c aliases.
@@ -261,6 +298,10 @@ TXN_BASE_FROM = """transactions t JOIN accounts a ON a.id = t.account_id
 # Effective scope of a transaction: its own override, else its account's (mixed counts as personal
 # until a transaction is explicitly marked business).
 SCOPE_SQL = "COALESCE(t.scope, CASE a.scope WHEN 'business' THEN 'business' ELSE 'personal' END)"
+
+# Effective business of a business-scope row: the split/transaction override (txn_lines already folds the split in),
+# else the account's, else the default business (id 1). Only meaningful where SCOPE_SQL = 'business'.
+BUSINESS_SQL = f"COALESCE(t.business_id, a.business_id, {DEFAULT_BUSINESS_ID})"
 
 DEFAULT_CATEGORIES: list[tuple[str, str]] = [
     ("Income", "income"),

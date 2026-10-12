@@ -9,9 +9,10 @@ from ..common import meta, year_bounds
 from ..config import Config
 from ..guard import GuardError
 from ..money import amount, pct
+from .businesses import business_view
 from .home_office import home_office_deduction
 from .lines import DISCLAIMER
-from .schedule_c import schedule_c_draft
+from .schedule_c import SE_RULE_NOTE, draft_parts
 from .states import STATES, VERIFIED_FOR, next_business_day, state_installments
 
 MAX_STATE_RATE = 20
@@ -136,19 +137,26 @@ def estimated_tax(
     state_rate_raw = (
         state_income_tax_rate_pct if state_income_tax_rate_pct is not None else cfg.tax.state_income_tax_rate_pct
     )
-    draft = schedule_c_draft(conn, cfg, year, today)
-    ytd_profit = draft["net_profit"]["minor"]
-    before = draft["tentative_profit_before_home_office"]["minor"]
-    if year == today.year:
-        elapsed = (today - start).days + 1
-        days_in_year = (end - start).days + 1
-        projected = before * days_in_year // elapsed if elapsed else before
-        # The home office deduction is an annual figure: subtract it once from the annualized profit rather
-        # than annualizing a year-to-date profit that already had the full-year amount taken out.
-        ho = home_office_deduction(cfg, year, projected)
-        projected -= ho["line_30"]["minor"] if ho else 0
-    else:
-        projected = ytd_profit
+    rows, drafts = draft_parts(conn, cfg, year, today)
+    multi = len(drafts) > 1
+    ytd_profit = sum(d["net_profit"]["minor"] for d in drafts)
+    # Self-employment tax is per person: every business's net profit is projected on its own (each with its own
+    # home office share and limit) and the totals are added before the one SE computation below.
+    projections: list[int] = []
+    for row, d in zip(rows, drafts, strict=True):
+        if year == today.year:
+            before = d["tentative_profit_before_home_office"]["minor"]
+            elapsed = (today - start).days + 1
+            days_in_year = (end - start).days + 1
+            p = before * days_in_year // elapsed if elapsed else before
+            # The home office deduction is an annual figure: subtract it once from the annualized profit rather
+            # than annualizing a year-to-date profit that already had the full-year amount taken out.
+            ho = home_office_deduction(cfg, year, p, business_view(row))
+            p -= ho["line_30"]["minor"] if ho else 0
+        else:
+            p = d["net_profit"]["minor"]
+        projections.append(p)
+    projected = sum(projections)
 
     rate_raw = income_tax_rate_pct if income_tax_rate_pct is not None else cfg.tax.income_tax_rate_pct
     try:
@@ -207,6 +215,16 @@ def estimated_tax(
         "notes": notes,
         "meta": meta(conn, cfg, start, min(end, today)),
     }
+    if multi:
+        result["by_business"] = [
+            {
+                "business": business_view(row),
+                "ytd_net_profit": d["net_profit"],
+                "projected_annual_net_profit": amount(p, cur),
+            }
+            for row, d, p in zip(rows, drafts, projections, strict=True)
+        ]
+        notes.append(SE_RULE_NOTE)
     if state_code is not None:
         block = _state_block(state_code, state_rate_raw, year, taxable, today, cur)
         state_total = 0 if block["no_income_tax"] else (block["income_tax_estimate"] or {}).get("minor")

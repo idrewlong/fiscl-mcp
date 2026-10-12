@@ -25,7 +25,7 @@ from fiscl.importers.types import ParsedStatement, ParsedTxn
 from fiscl.sync import base, connect, connections, plaid, registry, simplefin, teller
 from fiscl.sync.base import SyncError
 
-from .conftest import TODAY, FakeKeyring
+from .conftest import ALLOWED_REFERENCE_URLS, TODAY, FakeKeyring
 from .test_phase2_qa import _post, _raw, _srv
 from .test_plaid import (
     ACCESS,
@@ -455,14 +455,57 @@ FORBIDDEN_FRAGMENTS = (
 )
 
 
+def _literal_text(node) -> str | None:
+    """The text of a string literal, or of `"a" + "b"` built only from literals (None for anything computed)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _literal_text(node.left), _literal_text(node.right)
+        return left + right if left is not None and right is not None else None
+    return None
+
+
+def _forbidden_hits(rel: str, tree: ast.AST) -> list[tuple[str, str]]:
+    """Forbidden fragments in string literals, including ones split across `+`.
+
+    Not caught (document, don't pretend): paths assembled at runtime with join/format/f-strings or from data.
+    The only exemptions are exact URLs in conftest.ALLOWED_REFERENCE_URLS for the one file listed there.
+    """
+    skip = _docstring_nodes(tree)
+    allowed = ALLOWED_REFERENCE_URLS.get(rel, ())
+    hits = []
+    for node in ast.walk(tree):
+        if id(node) in skip or not isinstance(node, ast.Constant | ast.BinOp):
+            continue
+        text = _literal_text(node)
+        if text is None or text in allowed:
+            continue
+        hits += [(rel, f) for f in FORBIDDEN_FRAGMENTS if f in text]
+    return hits
+
+
 def test_sec9_no_string_constant_in_any_module_names_a_money_movement_or_identity_endpoint():
     hits = []
     for rel, tree in _src_trees():
-        skip = _docstring_nodes(tree)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
-                hits += [(rel, f) for f in FORBIDDEN_FRAGMENTS if f in node.value]
+        hits += _forbidden_hits(rel, tree)
     assert hits == []
+
+
+def test_sec9_scan_catches_a_forbidden_path_assembled_from_literals():
+    split = ast.parse('URL = "https://x.example/inc" + "ome/get"')
+    assert _forbidden_hits("sync/plaid.py", split) == [("sync/plaid.py", "/income/")]
+    three = ast.parse('URL = "/pay" + "ment" + "s/send"')
+    assert ("a.py", "/payment") in _forbidden_hits("a.py", three)
+    assert _forbidden_hits("a.py", ast.parse('URL = "/ok" + "/path"')) == []
+
+
+def test_sec9_reference_url_exemption_is_exact_and_single_file():
+    url = next(iter(ALLOWED_REFERENCE_URLS["tax/states.py"]))
+    tree = ast.parse(f'U = "{url}"')
+    assert _forbidden_hits("tax/states.py", tree) == []
+    assert _forbidden_hits("sync/plaid.py", tree) == [("sync/plaid.py", "/income/")]
+    assert _forbidden_hits("tax/states.py", ast.parse(f'U = "{url}x"')) == [("tax/states.py", "/income/")]
+    assert _forbidden_hits("tax/states.py", ast.parse(f'U = "{url}" + "/income/"')) != []
 
 
 def test_sec9_policy_is_only_constructed_by_the_connector_modules():

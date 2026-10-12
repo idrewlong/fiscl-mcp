@@ -21,12 +21,26 @@ from ..common import (
 from ..config import Config
 from ..guard import GuardError, clean_text, parse_date
 from ..money import amount
+from .businesses import get_business
 from .lines import DISCLAIMER
 from .schedule_c import mileage_rate, mileage_summary
 
 
+def _item_business(conn, item: dict, i: int, scope, allowed: tuple[str, ...]):
+    """The business row an item assigns to, or None. Only valid with the business-capable scopes in `allowed`."""
+    if item.get("business") is None:
+        return None
+    if scope not in allowed:
+        raise GuardError(f"item {i}: business can only be set together with scope {' or '.join(allowed)}")
+    return get_business(conn, item["business"], allow_archived=False)
+
+
 def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
-    """Mark accounts, merchants, or transactions as business or personal. Dry run by default."""
+    """Mark accounts, merchants, or transactions as business or personal, and optionally which business.
+
+    `business` (a name from list_businesses) works with scope business (transactions, merchants) or business/mixed
+    (accounts). A transaction's business overrides its account's; with neither, the default business applies.
+    """
     check_items(items)
     plan, total = [], 0
     for i, item in enumerate(items, start=1):
@@ -34,33 +48,50 @@ def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
         if "account" in item:
             if scope not in ("personal", "business", "mixed"):
                 raise GuardError(f"item {i}: account scope must be personal, business, or mixed")
+            biz = _item_business(conn, item, i, scope, ("business", "mixed"))
             acct = find_account(conn, clean_text(str(item["account"]), 120))
             if acct is None:
                 raise GuardError(f"item {i}: unknown account; list_accounts shows them", code="not_found")
-            plan.append({"target": {"account": acct["name"]}, "from": acct["scope"], "to": scope, "_acct": acct["id"]})
+            entry = {"target": {"account": acct["name"]}, "from": acct["scope"], "to": scope, "_acct": acct["id"]}
+            if biz is not None:
+                entry.update({"business": biz["name"], "_biz": biz["id"]})
+            plan.append(entry)
             continue
         if scope not in ("personal", "business"):
             raise GuardError(f"item {i}: transaction scope must be personal or business")
+        biz = _item_business(conn, item, i, scope, ("business",))
         merchant, ids, rows = resolve_target(conn, item, i)
         rows, skipped = without_split_parents(rows)
         total += len(rows)
-        plan.append(
-            {
-                "target": target_of(merchant, ids),
-                **skipped,
-                "to": scope,
-                "matched_transactions": len(rows),
-                "current": count_by(rows, lambda r: r["scope"] or "account default"),
-                "_ids": [r["id"] for r in rows],
-            }
-        )
+        entry = {
+            "target": target_of(merchant, ids),
+            **skipped,
+            "to": scope,
+            "matched_transactions": len(rows),
+            "current": count_by(rows, lambda r: r["scope"] or "account default"),
+            "_ids": [r["id"] for r in rows],
+        }
+        if biz is not None:
+            entry.update({"business": biz["name"], "_biz": biz["id"]})
+        plan.append(entry)
     check_bulk(total)
     if not dry_run:
         for p in plan:
+            biz_id = p.get("_biz")
             if "_acct" in p:
-                conn.execute("UPDATE accounts SET scope = ? WHERE id = ?", (p["to"], p["_acct"]))
-            else:
+                if biz_id is None:
+                    conn.execute("UPDATE accounts SET scope = ? WHERE id = ?", (p["to"], p["_acct"]))
+                else:
+                    conn.execute(
+                        "UPDATE accounts SET scope = ?, business_id = ? WHERE id = ?", (p["to"], biz_id, p["_acct"])
+                    )
+            elif biz_id is None:
                 conn.executemany("UPDATE transactions SET scope = ? WHERE id = ?", [(p["to"], t) for t in p["_ids"]])
+            else:
+                conn.executemany(
+                    "UPDATE transactions SET scope = ?, business_id = ? WHERE id = ?",
+                    [(p["to"], biz_id, t) for t in p["_ids"]],
+                )
     result = plan_result(plan, total, dry_run, "Call again with dry_run=false to apply.")
     return with_meta(conn, cfg, result)
 

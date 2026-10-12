@@ -168,7 +168,6 @@ def test_not_found(conn, cfg):
         {"match_merchants": [""]},
         {"match_merchants": [5]},
         {"note": "n" * 201},
-        {"business": "Studio"},  # arrives with slice D
         {"bogus": 1},
     ],
 )

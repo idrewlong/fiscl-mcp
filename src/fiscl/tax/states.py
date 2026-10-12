@@ -86,8 +86,9 @@ STATES: dict[str, StateInfo] = {
     ),
     "CT": _taxed(
         "Connecticut",
-        # Built from pieces: the source scans in tests/ flag a path segment that matches a Plaid route name.
-        "https://portal.ct.gov/-/media/drs/forms/2025/" + "income" + "/ct1040es-flat0126.pdf",
+        # Reference data (a printed-form link shown to the user), not a request target. The forbidden-endpoint source
+        # scans in tests/ exempt this exact string via conftest.ALLOWED_REFERENCE_URLS; change it there too.
+        "https://portal.ct.gov/-/media/drs/forms/2025/income/ct1040es-flat0126.pdf",
     ),
     "DE": _taxed(
         "Delaware",

@@ -10,6 +10,15 @@ from fiscl.db import add_account, connect
 
 TODAY = date(2026, 10, 12)
 
+# The forbidden-endpoint source scans (test_connectors.py, test_phase2_fixes.py) match path fragments such as
+# "/income/" anywhere in src/. This is the single, exact exception: a printed-form URL kept as reference data in the
+# state table (Connecticut's estimated-tax voucher lives under a state-revenue path with an "income" folder). It is
+# a link shown to the user, not a connector route; nothing in tax/ makes a request. Matching is by exact string in
+# exactly this file; any other string, or the same string anywhere else, is still flagged.
+ALLOWED_REFERENCE_URLS: dict[str, tuple[str, ...]] = {
+    "tax/states.py": ("https://portal.ct.gov/-/media/drs/forms/2025/income/ct1040es-flat0126.pdf",),
+}
+
 
 @pytest.fixture(autouse=True)
 def _no_real_keychain_for_install_key(monkeypatch):

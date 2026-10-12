@@ -25,6 +25,7 @@ from ..config import Config
 from ..db import get_category_id, get_or_create_category
 from ..guard import GuardError, choice, clean_text
 from ..money import amount
+from ..tax.businesses import get_business
 
 MAX_NOTE = 500
 MAX_SPLIT_PARTS = 20
@@ -219,7 +220,7 @@ def dismiss_recurring(conn, cfg: Config, merchant=None, account=None, direction=
     return with_meta(conn, cfg, plan_result(plan, 0, dry_run, step))
 
 
-def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
+def _split_parts(conn, parts, parent: dict, cfg: Config) -> list[dict]:
     if not isinstance(parts, list) or not 2 <= len(parts) <= MAX_SPLIT_PARTS:
         raise GuardError(f"parts needs 2 to {MAX_SPLIT_PARTS} entries (or an empty list to remove the split)")
     out = []
@@ -244,7 +245,21 @@ def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
         if scope is not None:
             choice(scope, ("personal", "business"), f"part {i} scope")
         note = clean_text(str(part["note"]), 200) if part.get("note") else None
-        out.append({"minor": minor, "category": category, "scope": scope, "note": note})
+        business = None
+        if part.get("business") is not None:
+            if scope != "business":
+                raise GuardError(f"part {i}: business can only be set on a part with scope business")
+            business = get_business(conn, part["business"], allow_archived=False)
+        out.append(
+            {
+                "minor": minor,
+                "category": category,
+                "scope": scope,
+                "note": note,
+                "business": business["name"] if business else None,
+                "business_id": business["id"] if business else None,
+            }
+        )
     total = sum(p["minor"] for p in out)
     if total != parent["amount"]:
         raise GuardError("parts don't add up to the transaction amount; they must match exactly", code="sum_mismatch")
@@ -262,7 +277,7 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
             raise GuardError("this transaction isn't split")
         new_parts: list[dict] = []
     else:
-        new_parts = _split_parts(parts, parent, cfg)
+        new_parts = _split_parts(conn, parts, parent, cfg)
     plan = [
         {
             "transaction_id": parent["id"],
@@ -278,6 +293,7 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
                     "creates_category": get_category_id(conn, p["category"]) is None,
                     "scope": p["scope"],
                     "note": p["note"],
+                    **({"business": p["business"]} if p["business"] else {}),
                 }
                 for p in new_parts
             ],
@@ -287,7 +303,15 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
         conn.execute("DELETE FROM splits WHERE transaction_id = ?", (parent["id"],))
         for p in new_parts:
             conn.execute(
-                "INSERT INTO splits (transaction_id, amount, category_id, scope, note) VALUES (?, ?, ?, ?, ?)",
-                (parent["id"], p["minor"], get_or_create_category(conn, p["category"]), p["scope"], p["note"]),
+                "INSERT INTO splits (transaction_id, amount, category_id, scope, note, business_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    parent["id"],
+                    p["minor"],
+                    get_or_create_category(conn, p["category"]),
+                    p["scope"],
+                    p["note"],
+                    p["business_id"],
+                ),
             )
     return with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to apply."))

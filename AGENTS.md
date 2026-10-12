@@ -32,7 +32,7 @@ src/fiscl/
     edits.py         apply_categories, add_note, tag_transactions, split_transaction, dismiss_recurring
     planning.py      manage_asset, net_worth, afford, debt_payoff, manage_goal, goal_progress
     monitoring.py    find_anomalies, subscription_watchdog, refund_tracker
-  tax/             lines (constants, DISCLAIMER, line_for) · schedule_c · estimates · review (write-off questions) · edits (set_scope, log_trip, mileage_log) · home_office (simplified method, line 30) · export (`export_schedule_c`, files only under `<data dir>/exports/`) · states (50 states + DC estimated-tax table, `next_business_day`, `VERIFIED_FOR`) · forms1099 (`record_1099`, `reconcile_1099`, thresholds by payment year)
+  tax/             lines (constants, DISCLAIMER, line_for) · schedule_c · estimates · review (write-off questions) · edits (set_scope, log_trip, mileage_log) · home_office (simplified method, line 30) · export (`export_schedule_c`, files only under `<data dir>/exports/`) · states (50 states + DC estimated-tax table, `next_business_day`, `VERIFIED_FOR`) · forms1099 (`record_1099`, `reconcile_1099`, thresholds by payment year) · businesses (`manage_business`, `list_businesses`) · summary (`fiscl://tax/{year}` payload)
   common.py        shared service helpers: meta, with_meta, money_arg, account_id/find_account, scope/txn filters, year_bounds,
                    resolve_target, dry-run plan_result, bulk limits
   db.py            schema migrations, TXN_FROM join, SCOPE_SQL / SPENDING_FILTER / INCOME_FILTER, backups
@@ -62,6 +62,9 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - **Local writes:** `dry_run=True` by default, return `common.plan_result(...)`, cap bulk edits with `check_items`/`check_bulk`, and annotate the tool `LOCAL_DESTRUCTIVE` if it can remove or overwrite user data, `LOCAL_WRITE` only if purely additive. `dry_run` is a safety default, not a gate; the human gate is the MCP client's tool approval. TOML edits go through `config.append_toml_block` (keeps `.bak` + provenance).
 - **Files fiscl writes for the user** (exports, digests) go only under fixed folders in the data dir, opened with `O_CREAT|O_EXCL|O_NOFOLLOW` at 0600; never accept a caller-supplied path. Escape CSV formula prefixes and Markdown in bank-derived text.
 - **Tax reference data** (state schedules, 1099 thresholds) are static tables checked against official sources for tax year `VERIFIED_FOR`; rows with `verified=False` must surface a note. Dates roll to the next business day in code. Thresholds are looked up by payment year. No state bracket engine.
+- **Businesses:** effective business = split → transaction → account → default (id 1), exposed as `t.business_id` in `txn_lines`; NULL means the default, so single-business output is unchanged. SE tax is computed once on combined business profit (per person). Mileage counts on the default business.
+- **Prompts and resources** interpolate only validated values (e.g. a 4-digit year), never bank text.
+- **Source-scan exemptions** live only in `tests/conftest.py::ALLOWED_REFERENCE_URLS`: exact string, one file, with a reason. Never split strings to dodge the scan.
 - **Untrusted text:** bank descriptions go through `guard.clean_text` and are returned only as labeled data fields, never interpolated into prompts or instructions.
 - **Tax output** carries `DISCLAIMER` and frames findings as questions for the user and their preparer.
 - **Style:** ruff (line length 120, rules E/F/I/B/UP/SIM), `from __future__ import annotations`, module docstrings, sparse comments that explain why.

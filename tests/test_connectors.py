@@ -26,6 +26,8 @@ import pytest
 from fiscl.sync import base, connect, plaid, teller
 from fiscl.sync.base import Policy, SyncError
 
+from .conftest import ALLOWED_REFERENCE_URLS
+
 SRC = Path(__file__).resolve().parent.parent / "src"
 
 
@@ -174,12 +176,35 @@ FORBIDDEN = (
 )
 
 
+def scan_text(rel: str, text: str) -> list[str]:
+    """Forbidden fragments in a source file's text, after removing its explicitly allowlisted reference URLs.
+
+    Only an exact URL, in exactly the file named in conftest.ALLOWED_REFERENCE_URLS, is exempt.
+    Limitation: this is a textual scan, so a path assembled at runtime (join, format, a computed string) is not seen;
+    test_phase2_fixes.py adds an AST pass that also catches `"a" + "b"` assembled from literals.
+    """
+    for url in ALLOWED_REFERENCE_URLS.get(rel, ()):
+        text = text.replace(url, "")
+    return [f"{rel}: {bad}" for bad in FORBIDDEN if bad in text]
+
+
 def test_source_contains_no_money_movement_or_account_number_endpoints():
     offenders = []
     for path in SRC.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        offenders += [f"{path.relative_to(SRC)}: {bad}" for bad in FORBIDDEN if bad in text]
+        rel = path.relative_to(SRC).as_posix().removeprefix("fiscl/")
+        offenders += scan_text(rel, path.read_text(encoding="utf-8"))
     assert not offenders, offenders
+
+
+def test_the_reference_url_allowlist_is_narrow():
+    (rel, (url,)), *rest = ALLOWED_REFERENCE_URLS.items()
+    assert not rest and rel == "tax/states.py"
+    assert (SRC / "fiscl" / rel).read_text(encoding="utf-8").count(url) == 1  # one literal, not assembled
+    assert scan_text(rel, f'X = "{url}"') == []
+    assert scan_text("sync/plaid.py", f'X = "{url}"'), "the same URL in any other file is still flagged"
+    assert scan_text(rel, 'X = "https://example.gov/forms/income/other.pdf"'), "any other string is still flagged"
+    assert scan_text(rel, f'X = "{url}" + "/income/"'), "extra forbidden text next to the URL is still flagged"
+    assert scan_text(rel, 'X = "/transfer/create"'), "other fragments are still flagged in that file"
 
 
 def test_connector_modules_never_ask_for_forbidden_products():

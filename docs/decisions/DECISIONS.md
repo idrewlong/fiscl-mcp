@@ -59,3 +59,10 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 
 ## 2026-10-11 — Federal and state due dates roll to the next business day
 - **Decision:** `estimated_tax` rolls every due date (federal 1040-ES and state) to the next business day (weekends plus US federal holidays). State-only holidays aren't modeled and the notes say so. Shapes: `state` keys are omitted when no state is configured, and `suggested_per_quarter_with_state` is a per-quarter list because state percentages can differ.
+
+## 2026-10-11 — Multiple-business rules (Phase 3 slice D)
+- SE tax is computed once on the sum of all businesses' net profit (it's owed per person), so one business's loss offsets another's profit. Each Schedule C is drafted per business.
+- Mileage stays on the default business: the trip log has no business column yet.
+- Archiving a business is refused while it has current-year activity or 1099 forms.
+- The `tax_checkup` prompt falls back to the current year on an invalid `year` (fixed sentence, no echo) rather than erroring.
+- The forbidden-endpoint source scan has one exemption mechanism, an exact-string allowlist per file with a reason (`tests/conftest.py::ALLOWED_REFERENCE_URLS`). The AST scan also folds literal concatenation.

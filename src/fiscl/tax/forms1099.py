@@ -12,15 +12,16 @@ from datetime import date, datetime
 
 from ..common import check_items, meta, money_arg, plan_result, valid_id, with_meta, year_bounds
 from ..config import Config
-from ..db import SCOPE_SQL, TXN_FROM
+from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, SCOPE_SQL, TXN_FROM
 from ..guard import GuardError, choice, clean_text
 from ..money import amount
 from ..normalize import normalize_merchant
+from .businesses import business_view, get_business
 from .lines import DISCLAIMER
 
 FORMS = ("nec", "k", "misc")
 FORM_LABELS = {"nec": "1099-NEC", "k": "1099-K", "misc": "1099-MISC"}
-ITEM_FIELDS = {"action", "id", "tax_year", "form", "payer", "amount", "match_merchants", "note"}
+ITEM_FIELDS = {"action", "id", "tax_year", "form", "payer", "amount", "match_merchants", "note", "business"}
 MAX_ITEMS = 50
 MAX_PAYER = 80
 MAX_MERCHANT = 120
@@ -50,8 +51,13 @@ def nec_misc_threshold(payment_year: int) -> int | None:
 # --- record_1099 --------------------------------------------------------------------------
 
 
-def _key(tax_year: int, form: str, payer: str) -> tuple[int, str, str]:
-    return (tax_year, form, payer.casefold())
+def _key(tax_year: int, form: str, payer: str, business_id: int | None = None) -> tuple[int, str, str, int]:
+    """Uniqueness key; NULL business means the default business, like everywhere else."""
+    return (tax_year, form, payer.casefold(), business_id or DEFAULT_BUSINESS_ID)
+
+
+def _dict_key(d: dict) -> tuple[int, str, str, int]:
+    return _key(d["tax_year"], d["form"], d["payer"], d["business_id"])
 
 
 def _text(value, limit: int, i: int, what: str, allow_empty: bool = False) -> str:
@@ -92,8 +98,8 @@ def _tax_year(value, today: date, i: int) -> int:
     return value
 
 
-def _view(d: dict, cfg: Config) -> dict:
-    return {
+def _view(d: dict, cfg: Config, names: dict[int, str]) -> dict:
+    out = {
         "tax_year": d["tax_year"],
         "form": d["form"],
         "payer": d["payer"],
@@ -101,6 +107,9 @@ def _view(d: dict, cfg: Config) -> dict:
         "match_merchants": list(d["match_merchants"]),
         "note": d["note"],
     }
+    if d["business_id"] is not None:  # a form with no business belongs to the default one and shows no key
+        out["business"] = names.get(d["business_id"])
+    return out
 
 
 def _row_dict(row) -> dict:
@@ -111,6 +120,7 @@ def _row_dict(row) -> dict:
         "amount": row["amount"],
         "match_merchants": json.loads(row["match_merchants"]),
         "note": row["note"],
+        "business_id": row["business_id"],
     }
 
 
@@ -122,7 +132,8 @@ def record_1099(conn, cfg: Config, items=None, dry_run=True, today=None) -> dict
         raise GuardError(f"at most {MAX_ITEMS} items per call")
 
     stored = {r["id"]: _row_dict(r) for r in conn.execute("SELECT * FROM forms_1099")}
-    index = {_key(d["tax_year"], d["form"], d["payer"]): fid for fid, d in stored.items()}
+    index = {_dict_key(d): fid for fid, d in stored.items()}
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM businesses")}
     touched: set[int] = set()
     plan: list[dict] = []
     ops: list[tuple[str, int | None, dict | None]] = []
@@ -144,12 +155,12 @@ def record_1099(conn, cfg: Config, items=None, dry_run=True, today=None) -> dict
             touched.add(fid)
             before = stored[fid]
         if action == "remove":
-            index.pop(_key(before["tax_year"], before["form"], before["payer"]), None)
-            plan.append({"action": "remove", "id": fid, "before": _view(before, cfg), "after": None})
+            index.pop(_dict_key(before), None)
+            plan.append({"action": "remove", "id": fid, "before": _view(before, cfg, names), "after": None})
             ops.append(("remove", fid, None))
             continue
 
-        after = dict(before) if before else {"match_merchants": [], "note": None}
+        after = dict(before) if before else {"match_merchants": [], "note": None, "business_id": None}
         if action == "add":
             missing = [f for f in ("tax_year", "form", "payer", "amount") if item.get(f) is None]
             if missing:
@@ -171,9 +182,11 @@ def record_1099(conn, cfg: Config, items=None, dry_run=True, today=None) -> dict
         if "note" in item:
             note = _text(item["note"], MAX_NOTE, i, "note", allow_empty=True) if item["note"] is not None else ""
             after["note"] = note or None  # empty clears
+        if item.get("business") is not None:
+            after["business_id"] = get_business(conn, item["business"], allow_archived=False)["id"]
 
-        new_key = _key(after["tax_year"], after["form"], after["payer"])
-        old_key = _key(before["tax_year"], before["form"], before["payer"]) if before else None
+        new_key = _dict_key(after)
+        old_key = _dict_key(before) if before else None
         if new_key != old_key and new_key in index:
             raise GuardError(
                 f"item {i}: a form with the same year, type and payer already exists; use update", code="exists"
@@ -182,7 +195,12 @@ def record_1099(conn, cfg: Config, items=None, dry_run=True, today=None) -> dict
             index.pop(old_key, None)
         index[new_key] = fid if fid is not None else -i
         plan.append(
-            {"action": action, "id": fid, "before": _view(before, cfg) if before else None, "after": _view(after, cfg)}
+            {
+                "action": action,
+                "id": fid,
+                "before": _view(before, cfg, names) if before else None,
+                "after": _view(after, cfg, names),
+            }
         )
         ops.append((action, fid, after))
 
@@ -199,18 +217,19 @@ def record_1099(conn, cfg: Config, items=None, dry_run=True, today=None) -> dict
                 data["amount"],
                 json.dumps(data["match_merchants"]),
                 data["note"],
+                data["business_id"],
             )
             if action == "add":
                 cur = conn.execute(
-                    "INSERT INTO forms_1099 (tax_year, form, payer, amount, match_merchants, note, created_at, "
-                    "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO forms_1099 (tax_year, form, payer, amount, match_merchants, note, business_id, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, now, now),
                 )
                 plan[n]["id"] = int(cur.lastrowid)
             else:
                 conn.execute(
                     "UPDATE forms_1099 SET tax_year = ?, form = ?, payer = ?, amount = ?, match_merchants = ?, "
-                    "note = ?, updated_at = ? WHERE id = ?",
+                    "note = ?, business_id = ?, updated_at = ? WHERE id = ?",
                     (*values, now, fid),
                 )
     result = plan_result(plan, 0, dry_run, "Call again with dry_run=false to apply.")
@@ -280,20 +299,28 @@ def _match_keys(names: list[str]) -> set[str]:
     return keys
 
 
-def reconcile_1099(conn, cfg: Config, tax_year=None, today=None) -> dict:
-    """Compare typed-in 1099 amounts with business-scope income by merchant, as questions for the user."""
+def reconcile_1099(conn, cfg: Config, tax_year=None, today=None, business=None) -> dict:
+    """Compare typed-in 1099 amounts with business-scope income by merchant, as questions for the user.
+
+    `business` limits both the forms and the income to one business; without it every business is combined."""
     year, start, end = year_bounds(tax_year, today)
     cur = cfg.currency
+    biz = get_business(conn, business) if business is not None else None
+    form_sql, form_params = (
+        ("AND COALESCE(business_id, ?) = ?", (DEFAULT_BUSINESS_ID, biz["id"])) if biz is not None else ("", ())
+    )
+    income_sql, income_params = (f"AND {BUSINESS_SQL} = ?", (biz["id"],)) if biz is not None else ("", ())
     forms = conn.execute(
-        "SELECT * FROM forms_1099 WHERE tax_year = ? ORDER BY form, payer COLLATE NOCASE", (year,)
+        f"SELECT * FROM forms_1099 WHERE tax_year = ? {form_sql} ORDER BY form, payer COLLATE NOCASE",
+        (year, *form_params),
     ).fetchall()
     income = conn.execute(
         f"""SELECT t.merchant AS merchant, SUM(t.amount) AS total, COUNT(*) AS n FROM {TXN_FROM}
-            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business'
+            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {income_sql}
               AND t.transfer_group IS NULL AND t.amount > 0
               AND COALESCE(c.kind, 'income') NOT IN ('transfer', 'ignore', 'expense')
             GROUP BY t.merchant""",
-        (start.isoformat(), end.isoformat()),
+        (start.isoformat(), end.isoformat(), *income_params),
     ).fetchall()
     # Merge merchants that differ only by case into one bucket.
     buckets: dict[str, dict] = {}
@@ -359,7 +386,7 @@ def reconcile_1099(conn, cfg: Config, tax_year=None, today=None) -> dict:
             f"The inflation-indexed 1099-NEC/MISC threshold for {year} isn't published yet; the 2026 amount is used "
             "for the unreported-payer list."
         )
-    return {
+    result = {
         "tax_year": year,
         "forms": out_forms,
         "unreported_payers": [
@@ -393,3 +420,6 @@ def reconcile_1099(conn, cfg: Config, tax_year=None, today=None) -> dict:
         "notes": notes,
         "meta": meta(conn, cfg, start, min(end, today or date.today()), row_count=len(out_forms)),
     }
+    if biz is not None:
+        result = {"business": business_view(biz), **result}
+    return result

@@ -88,6 +88,8 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "export_schedule_c": {"year": 2026, "include_transactions": True},
     "record_1099": {"items": [{"action": "add", "tax_year": 2026, "form": "nec", "payer": "Acme", "amount": 100}]},
     "reconcile_1099": {"tax_year": 2026},
+    "manage_business": {"action": "add", "name": "Consulting"},
+    "list_businesses": {},
     "list_connections": {},
 }
 

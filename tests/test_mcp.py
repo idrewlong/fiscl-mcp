@@ -299,7 +299,8 @@ async def test_export_schedule_c_annotations_and_dry_run_default(demo):
         a = tool.annotations
         assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False
         assert a.idempotent_hint is False
-        assert set(tool.input_schema["properties"]) == {"year", "formats", "include_transactions", "dry_run"}
+        props = {"year", "formats", "include_transactions", "dry_run", "business"}
+        assert set(tool.input_schema["properties"]) == props
         r = await c.call_tool("export_schedule_c", {"year": 2026})
         assert not r.is_error
         assert r.structured_content["dry_run"] is True

@@ -43,6 +43,8 @@ class HomeOffice:
 
     square_feet: int  # 1-300, regular and exclusive business use
     months_used: int = 12  # 1-12; months with business use, averaged into the allowable area
+    # Square feet per business name when several businesses share the home; empty = all of it to the default business.
+    allocation: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -172,6 +174,11 @@ amount_tolerance_pct = 15
 # [tax.home_office.2026]
 # square_feet = 200          # 1-300, used regularly and exclusively for business
 # months_used = 12           # 1-12 (default 12); months of business use, averaged into the area
+# With several businesses in the same home, split the area by business name (the total can't exceed square_feet).
+# Without an allocation the whole area goes to the default business.
+# [tax.home_office.2026.allocation]
+# "Studio" = 150
+# "Consulting" = 50
 
 # Optional: interest rates and minimums for debt_payoff (bank exports don't carry them).
 # Key = the account name in fiscl. apr is a percent, min_payment is dollars.
@@ -274,14 +281,34 @@ def _load_home_office(raw: Any) -> dict[int, HomeOffice]:
         if not (isinstance(key, str) and key.isascii() and key.isdigit() and 2000 <= int(key) <= 2100):
             raise ConfigError("[tax.home_office] years must be 4-digit years between 2000 and 2100")
         where = f"tax.home_office.{int(key)}"
-        if not isinstance(entry, dict) or set(entry) - {"square_feet", "months_used"}:
-            raise ConfigError(f"[{where}] takes only square_feet and months_used")
+        if not isinstance(entry, dict) or set(entry) - {"square_feet", "months_used", "allocation"}:
+            raise ConfigError(f"[{where}] takes only square_feet, months_used and an [allocation] table")
         if "square_feet" not in entry:
             raise ConfigError(f"[{where}] needs square_feet (1 to 300)")
+        square_feet = _int(entry, "square_feet", 0, 1, 300, where)
         out[int(key)] = HomeOffice(
-            square_feet=_int(entry, "square_feet", 0, 1, 300, where),
+            square_feet=square_feet,
             months_used=_int(entry, "months_used", 12, 1, 12, where),
+            allocation=_load_allocation(entry.get("allocation", {}), square_feet, where),
         )
+    return out
+
+
+def _load_allocation(raw: Any, square_feet: int, where: str) -> dict[str, int]:
+    """[tax.home_office.YYYY.allocation]: business name -> square feet, total at most the home office area."""
+    if not isinstance(raw, dict):
+        raise ConfigError(f"[{where}.allocation] must be a table of business name = square feet")
+    out: dict[str, int] = {}
+    seen: set[str] = set()
+    for name, sqft in raw.items():
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60 or name.strip().casefold() in seen:
+            raise ConfigError(f"[{where}.allocation] needs distinct business names of 1 to 60 characters")
+        if not isinstance(sqft, int) or isinstance(sqft, bool) or sqft < 1:
+            raise ConfigError(f"[{where}.allocation] values must be whole square feet of at least 1")
+        seen.add(name.strip().casefold())
+        out[name.strip()] = sqft
+    if sum(out.values()) > square_feet:
+        raise ConfigError(f"[{where}.allocation] adds up to more than square_feet")
     return out
 
 

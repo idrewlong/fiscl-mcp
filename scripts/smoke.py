@@ -75,7 +75,17 @@ def counts(db: Path) -> tuple:
     with sqlite3.connect(db) as conn:
         return tuple(
             conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in ("transactions", "tags", "splits", "manual_assets", "goals", "trips", "categories", "forms_1099")
+            for t in (
+                "transactions",
+                "tags",
+                "splits",
+                "manual_assets",
+                "goals",
+                "trips",
+                "categories",
+                "forms_1099",
+                "businesses",
+            )
         )
 
 
@@ -131,6 +141,9 @@ async def run(home: Path) -> Smoke:
             ("estimated_tax", {"income_tax_rate_pct": 22, "state": "CA", "state_income_tax_rate_pct": 6}),
             ("estimated_tax", {"state": "TX"}),
             ("reconcile_1099", {}),
+            ("reconcile_1099", {"business": "My business"}),
+            ("list_businesses", {}),
+            ("schedule_c_draft", {"business": "My business"}),
             ("review_writeoffs", {}),
             ("mileage_log", {}),
         ]
@@ -152,6 +165,8 @@ async def run(home: Path) -> Smoke:
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business"}]}),
             ("log_trip", {"trip_date": "2026-01-02", "miles": 10, "purpose": "Smoke test client visit"}),
             ("export_schedule_c", {"include_transactions": True}),
+            ("manage_business", {"action": "add", "name": "Smoke Consulting"}),
+            ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business", "business": "My business"}]}),
             (
                 "record_1099",
                 {"items": [{"action": "add", "tax_year": 2026, "form": "nec", "payer": "Smoke Payer", "amount": 1000}]},
@@ -186,6 +201,10 @@ async def run(home: Path) -> Smoke:
             ("record_1099", {"items": [{"action": "remove", "id": 10**6}]}),
             ("record_1099", {"items": [{"action": "add", "tax_year": 2026, "form": "w2", "payer": "X", "amount": 1}]}),
             ("reconcile_1099", {"tax_year": 1800}),
+            ("schedule_c_draft", {"business": "No such business"}),
+            ("manage_business", {"action": "archive", "name": "My business"}),
+            ("manage_business", {"action": "add", "name": "my BUSINESS"}),
+            ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "personal", "business": "My business"}]}),
             # not connected in a fresh demo home; must fail cleanly, not reach the network
             ("sync_accounts", {"provider": "teller"}),
             ("sync_accounts", {"provider": "plaid"}),
@@ -222,6 +241,19 @@ async def run(home: Path) -> Smoke:
                 s.check(f"resource {res.uri} readable", bool(text))
         uris = {str(r.uri) for r in resources}
         s.check("v2 resources listed", {"fiscl://goals", "fiscl://recurring"} <= uris, uris)
+
+        # Resource templates aren't in list_resources: read the tax-year summary directly, and a bad year must fail.
+        templates = {str(t.uri_template) for t in (await c.list_resource_templates()).resource_templates}
+        s.check("tax resource template listed", "fiscl://tax/{year}" in templates, templates)
+        tax_year = json.loads((await c.read_resource(f"fiscl://tax/{date.today().year}")).contents[0].text)
+        wanted = {"schedule_c", "estimated_tax", "review", "forms_1099", "exports", "disclaimer"}
+        s.check("fiscl://tax/{year} has its sections", wanted <= set(tax_year), sorted(tax_year))
+        for bad_year in ("abcd", "1999"):
+            try:
+                await c.read_resource(f"fiscl://tax/{bad_year}")
+                s.check(f"fiscl://tax/{bad_year} is rejected", False, "read succeeded")
+            except Exception:  # noqa: BLE001 - any protocol error is the expected outcome
+                s.check(f"fiscl://tax/{bad_year} is rejected", True)
 
         prompt_args = {"monthly_review": {}, "cash_forecast": {"days": "45"}, "tax_checkup": {"year": "2026"}}
         prompts = (await c.list_prompts()).prompts

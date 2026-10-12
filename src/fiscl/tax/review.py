@@ -6,8 +6,9 @@ import re
 
 from ..common import meta, year_bounds
 from ..config import Config
-from ..db import SCOPE_SQL, SPENDING_FILTER, TXN_FROM
+from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, SCOPE_SQL, SPENDING_FILTER, TXN_FROM
 from ..money import amount
+from .businesses import get_business
 from .lines import DISCLAIMER, line_for
 
 # Merchants that are often business expenses for freelancers and creative/technical work.
@@ -24,13 +25,19 @@ _BUSINESSY = re.compile(
 DE_MINIMIS_MINOR = 250_000  # $2,500 de minimis safe harbor per item/invoice (no applicable financial statement)
 
 
-def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict:
-    """Questions to confirm, not conclusions: things that might be business expenses or need attention."""
+def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None, business=None) -> dict:
+    """Questions to confirm, not conclusions: things that might be business expenses or need attention.
+
+    `business` limits the business-side sections to one business; personal-side questions (possible business
+    spending, income to confirm, mixed accounts) are about unassigned money, so they stay unfiltered.
+    """
     year, start, end = year_bounds(year, today)
     cur = cfg.currency
     span = (start.isoformat(), end.isoformat())
     limit = max(1, min(int(limit), 100))
     sections: dict[str, list] = {}
+    chosen = get_business(conn, business) if business is not None else None
+    biz_sql, biz_params = (f"AND {BUSINESS_SQL} = ?", (chosen["id"],)) if chosen is not None else ("", ())
 
     personal = conn.execute(
         f"""SELECT t.merchant, COUNT(DISTINCT t.id) AS n, -SUM(t.amount) AS spent, MAX(t.posted_date) AS last,
@@ -56,9 +63,9 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
     biz = conn.execute(
         f"""SELECT t.id, t.posted_date, t.merchant, t.amount, c.name AS category, c.schedule_c_line AS line
             FROM {TXN_FROM}
-            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' AND {SPENDING_FILTER}
+            WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {biz_sql} AND {SPENDING_FILTER}
             ORDER BY t.amount""",
-        span,
+        (*span, *biz_params),
     ).fetchall()
     sections["business_needs_category"] = [
         {
@@ -109,6 +116,30 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
         }
         for r in mixed
     ]
+
+    # With several businesses, business money that nobody assigned (no transaction, split, or account business) falls
+    # to the default business; ask which one it was really for.
+    others = conn.execute("SELECT COUNT(*) FROM businesses WHERE archived = 0").fetchone()[0] > 1
+    if others and (chosen is None or chosen["id"] == DEFAULT_BUSINESS_ID):
+        loose = conn.execute(
+            f"""SELECT t.id, t.posted_date, t.merchant, t.amount FROM {TXN_FROM}
+                WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' AND t.transfer_group IS NULL
+                  AND t.business_id IS NULL AND a.business_id IS NULL
+                  AND COALESCE(c.kind, '') NOT IN ('transfer', 'ignore')
+                ORDER BY ABS(t.amount) DESC, t.id LIMIT ?""",
+            (*span, limit),
+        ).fetchall()
+        sections["business_unassigned"] = [
+            {
+                "id": r["id"],
+                "date": r["posted_date"],
+                "merchant": r["merchant"],
+                "amount": amount(r["amount"], cur),
+                "question": "Which business was this for? It is counted on the default business until you say "
+                "(set_scope with business, or assign the whole account).",
+            }
+            for r in loose
+        ]
 
     income = conn.execute(
         f"""SELECT t.merchant, COUNT(DISTINCT t.id) AS n, SUM(t.amount) AS total, GROUP_CONCAT(DISTINCT c.name) AS cats
