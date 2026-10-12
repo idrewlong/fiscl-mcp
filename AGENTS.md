@@ -40,7 +40,8 @@ src/fiscl/
   config.py        data dir layout, config/rules/budgets TOML, tax settings
   charts.py        chart specs + MCP Apps HTML view (no external requests)
   importers/       core pipeline, csv_import (profiles), ofx, types
-  sync/simplefin.py  read-only bank sync
+  sync/            read-only bank connectors: base.py (allowlisted no-redirect request helper, keychain, mTLS, Connector protocol),
+                   simplefin.py, teller.py, connect.py (human-only localhost connect flow), connections.py, registry.py
   normalize.py · categorize.py · transfers.py · recurring.py · money.py · watch.py · demo.py · cli.py
 scripts/smoke.py   dev-only: demo data + every tool/resource/prompt over real stdio (`uv run python scripts/smoke.py`)
 tests/             pytest; conftest has `cfg`, `conn`, `demo` fixtures, `add_txn` helper, fixed TODAY

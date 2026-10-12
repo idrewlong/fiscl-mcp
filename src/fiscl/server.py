@@ -693,20 +693,35 @@ def build_server(cfg: Config) -> MCPServer:
     @mcp.tool(
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True),
         description=(
-            "Pull recent balances and transactions from the user's banks through their SimpleFIN Bridge connection "
-            "(read-only; it cannot move money). Requires `fiscl sync setup` to have been run once."
+            "Pull recent balances and transactions from the user's connected banks (SimpleFIN, Teller, Plaid; "
+            "read-only, it cannot move money) into the local database. provider = simplefin | teller | plaid | all "
+            "(default: every connected provider; unconnected ones are skipped). The user connects banks themselves "
+            "in a terminal with `fiscl connect`; this tool can't."
         ),
     )
-    def sync_accounts(days: int | None = None) -> dict[str, Any]:
-        from .sync.simplefin import SyncError, sync
+    def sync_accounts(provider: str = "all", days: int | None = None) -> dict[str, Any]:
+        from .sync import registry
+        from .sync.base import SyncError
 
         def service(conn, cfg_, **kw):
             try:
-                return sync(conn, cfg_, **kw)
+                return registry.sync_accounts(conn, cfg_, **kw)
             except SyncError as exc:
-                raise GuardError(str(exc)) from exc
+                raise GuardError(str(exc), code="sync_failed") from exc
 
-        return run("sync_accounts", service, days=days)
+        return run("sync_accounts", service, provider=provider, days=days)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "Which banks are connected for sync: provider, institution, account names, last sync time, and status "
+            "(ok, needs_reauth, error). Never returns tokens or credentials."
+        ),
+    )
+    def list_connections() -> dict[str, Any]:
+        from .sync import registry
+
+        return run("list_connections", registry.list_connections)
 
     # --- resources --------------------------------------------------------------------------
 

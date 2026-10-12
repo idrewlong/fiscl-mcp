@@ -49,6 +49,18 @@ fiscl sync setup   # paste a SimpleFIN Bridge setup token; it's stored in your O
 fiscl sync run
 ```
 
+Teller (recommended): create a free developer account at teller.io, then connect in your terminal. The data flows bank -> Teller -> your machine; Teller holds the bank connection and sees the data in transit.
+
+```bash
+uv sync --extra sync
+# optional, in ~/fiscl/config.toml:  [connectors.teller]  environment = "development"   # or "sandbox"
+fiscl connect teller        # asks for your application id (hidden) and your Teller certificate/key files once
+fiscl connect list
+fiscl connect forget teller # revokes access at Teller and deletes the stored credentials
+```
+
+Then ask your assistant to run `sync_accounts` (all connected providers, or `provider: teller`) and `list_connections`.
+
 ## What it can do
 
 | Area | Tools |

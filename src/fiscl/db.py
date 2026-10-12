@@ -203,6 +203,20 @@ MIGRATIONS: list[str] = [
            t.transfer_group, t.is_pending, COALESCE(s.note, t.note), t.import_id
       FROM splits s JOIN transactions t ON t.id = s.transaction_id;
     """,
+    # 4 — v2 phase 2: bank connections. Metadata only; tokens live in the OS keychain, never here.
+    # Down: DROP TABLE connections;
+    """
+    CREATE TABLE connections (
+        id            INTEGER PRIMARY KEY,
+        provider      TEXT NOT NULL CHECK (provider IN ('simplefin','teller','plaid')),
+        institution   TEXT,
+        item_ref_hash TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        last_sync_at  TEXT,
+        status        TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','needs_reauth','error')),
+        UNIQUE (provider, item_ref_hash)
+    );
+    """,
 ]
 
 # The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).

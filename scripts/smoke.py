@@ -121,6 +121,9 @@ async def run(home: Path) -> Smoke:
             ("merchant_history", {"merchant": txn["merchant"]}),
             ("category_trend", {"category": "Groceries"}),
             ("list_accounts", {}),
+            ("list_connections", {}),
+            # nothing is connected in a fresh demo home: skipped with a note, never a network call
+            ("sync_accounts", {}),
             ("import_status", {}),
             ("list_uncategorized", {}),
             ("schedule_c_draft", {}),
@@ -170,8 +173,9 @@ async def run(home: Path) -> Smoke:
             ("tag_transactions", {"items": [{"transaction_ids": [tid]}]}),
             ("set_budget", {"items": [{"category": "Groceries", "monthly": -5}]}),
             ("log_trip", {"trip_date": "2999-01-01", "miles": 5, "purpose": "future trip"}),
-            # not set up in a fresh demo home; must fail cleanly, not reach the network
-            ("sync_accounts", {}),
+            # not connected in a fresh demo home; must fail cleanly, not reach the network
+            ("sync_accounts", {"provider": "teller"}),
+            ("sync_accounts", {"provider": "bogus"}),
         ]
         for tool, args in bad:
             await s.call(c, tool, args, ERROR)

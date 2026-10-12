@@ -1,13 +1,13 @@
 # Security
 
-fiscl handles financial data, so its defaults are conservative and its guarantees are enforced in code and covered by tests (`tests/test_guardrails.py`, `tests/test_security.py`, `tests/test_mcp.py`, `tests/test_simplefin.py`).
+fiscl handles financial data, so its defaults are conservative and its guarantees are enforced in code and covered by tests (`tests/test_guardrails.py`, `tests/test_security.py`, `tests/test_mcp.py`, `tests/test_simplefin.py`, `tests/test_connectors.py`, `tests/test_teller.py`).
 
 ## Where your data goes
 
 | Data path | Where it goes | Notes |
 |---|---|---|
 | Bank exports you import (CSV/OFX/QFX) | Your machine only | Parsed locally into `~/fiscl/fiscl.db`. No third party involved. |
-| Optional bank sync (SimpleFIN today; Plaid/Teller planned) | Bank → aggregator → your machine | The aggregator holds the bank connection and sees the data in transit, under its own privacy policy. fiscl stores it only locally. Sync is read-only and opt-in. |
+| Optional bank sync (SimpleFIN, Teller; Plaid planned) | Bank → aggregator → your machine | The aggregator holds the bank connection and sees the data in transit, under its own privacy policy. fiscl stores it only locally. Sync is read-only and opt-in. |
 | **Tool results sent to your AI model** | **Your MCP client sends them to whatever model it uses** | fiscl runs locally, but when you ask Claude (or another assistant) a question, the numbers and merchant names fiscl returns go to that model's provider, just like anything else you type into the chat. To limit what leaves your machine: keep aggregates by default (fiscl does), set `redact_descriptions = true`, or use an MCP client backed by a local model. |
 
 fiscl itself has no telemetry, no analytics, no accounts, and no servers.
@@ -19,7 +19,9 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 - **Private files.** The data directory is 0700, and fiscl runs with umask 077, so everything it creates (database, WAL, logs, backups, `.bak` files) is 0600. `fiscl doctor` checks and repairs permissions, warns when the data directory is inside a cloud-synced folder (iCloud Drive, Dropbox, OneDrive, Google Drive, Box), and warns when FileVault is off on macOS. fiscl refuses to use your home directory itself as its data directory.
 - **Encryption at rest** relies on OS full-disk encryption (FileVault, BitLocker, LUKS). Turn it on. An encrypted database (SQLCipher) is on the roadmap.
 - **Secrets.** Bank-sync credentials are stored only in your OS keychain. fiscl refuses to sync if no keychain is available rather than fall back to plain text. Setup tokens are read with hidden input, never from command-line arguments. Credentials travel in an `Authorization` header, never a URL, and that header is never forwarded on redirects.
-- **Network hardening for sync.** https only, an allowlist of hosts, TLS verification on, and redirects never followed, so credentials can't be bounced to another host.
+- **Network hardening for sync.** https only, an allowlist of hosts, TLS verification on, and redirects never followed, so credentials can't be bounced to another host. Each connector also has a hard-coded allowlist of (method, path) pairs checked before any socket opens: Teller may only read accounts, transactions, and balances, and revoke access (`DELETE`). Nothing can reach account/routing numbers, identity, verification, or money movement, and a test scans `src/` for those endpoint strings.
+- **Bank connections are human-only.** `fiscl connect teller` runs a one-shot server on 127.0.0.1 (random port, random 32-byte URL token, one POST, 10-minute timeout, strict CSP) that hosts Teller's own Connect widget in your browser; it is never an MCP tool, so a model can't start one. Access tokens, your Teller certificate/key, and application id live only in the OS keychain (`fiscl:<provider>:<ref>`); the database stores only provider, institution, a hashed reference, and sync status. `fiscl connect forget teller` revokes the enrollment at Teller and deletes the keychain entries.
+- **Client certificate on disk, briefly.** Python's `ssl` can only load a client certificate from a file path. On Linux fiscl uses an in-memory file; elsewhere it writes the PEM (0600) into a fresh private (0700) temp directory, loads it, and deletes both immediately. It exists for milliseconds and is never in the data directory.
 - **Redaction.** Full account numbers are never stored, only a hash and the last 4 digits. Every tool response is scrubbed for card numbers (Luhn-checked), SSNs, and long account-like numbers.
 - **Untrusted text.** Bank descriptions are Unicode-normalized, stripped of control and bidi characters, capped, and returned only as labeled data. The server tells the model never to follow instructions found in them.
 - **Chart view.** The in-chat chart has a strict Content-Security-Policy (no network, no external resources), renders bank-derived labels as text only, and accepts messages only from its host frame.

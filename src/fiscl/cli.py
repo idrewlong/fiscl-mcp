@@ -203,6 +203,77 @@ def cmd_sync(cfg, args) -> int:
     return 0
 
 
+def _ensure_teller_credentials(cfg) -> None:
+    """Collect the user's Teller application id (hidden input) and, outside sandbox, their client certificate and
+    key (read once from the files Teller issued, then kept only in the keychain; the paths are not retained)."""
+    import getpass
+
+    from .sync import base, teller
+
+    need_app = not base.secret_get(base.secret_name("teller", "app_id"))
+    need_cert = cfg.teller_environment != "sandbox" and not (
+        base.secret_get(base.secret_name("teller", "cert")) and base.secret_get(base.secret_name("teller", "key"))
+    )
+    if not (need_app or need_cert):
+        return
+    app_id = (
+        getpass.getpass("Teller application ID (hidden): ").strip()
+        if need_app
+        else base.secret_get(base.secret_name("teller", "app_id"))
+    )
+    cert = key = None
+    if need_cert:
+        print(
+            "Teller needs the client certificate and private key it issued to your developer account\n"
+            "(teller.io/settings/certificates). Give the file paths once; they are copied into your OS keychain.",
+            file=sys.stderr,
+        )
+        cert, key = teller.read_pem_files(input("Certificate file: ").strip(), input("Private key file: ").strip())
+    teller.store_app_credentials(app_id or "", cert, key)
+
+
+def cmd_connect(cfg, args) -> int:
+    import getpass
+
+    from .sync import base, connect, connections, registry, simplefin
+    from .sync.base import SyncError
+
+    def say(msg: str) -> None:
+        print(msg, file=sys.stderr)
+
+    try:
+        if args.target == "list":
+            with open_db(cfg) as conn:
+                _print(registry.list_connections(conn, cfg))
+        elif args.target == "forget":
+            with open_db(cfg) as conn:
+                registry.forget(conn, cfg, args.provider, args.institution)
+            print(f"Disconnected {args.provider}" + (f" ({args.institution})" if args.institution else "") + ".")
+        elif args.target == "plaid":
+            say("Plaid support is coming in the next release. Use `fiscl connect teller` or `fiscl connect simplefin`.")
+            return 1
+        else:
+            base.keyring_backend()  # refuse before asking for anything
+            if args.target == "teller":
+                if cfg.teller_environment == "production":
+                    say("Teller environment is 'production' (needs Teller business verification).")
+                _ensure_teller_credentials(cfg)
+                with open_db(cfg) as conn:
+                    connect.connect_teller(cfg, conn, announce=say)
+                print("Connected. Ask your assistant to sync_accounts, or run `fiscl sync run`.")
+            elif args.target == "simplefin":
+                say("Paste your SimpleFIN setup token (from https://beta-bridge.simplefin.org). Input is hidden.")
+                host = simplefin.claim(getpass.getpass("Setup token: "))
+                with open_db(cfg) as conn:
+                    ref = connections.item_ref_hash("simplefin", "access_url")
+                    connections.add_connection(conn, "simplefin", "SimpleFIN Bridge", ref)
+                print(f"Connected to {host}. The access credential is stored in your OS keychain.")
+    except SyncError as exc:
+        print(f"connect error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_tax(cfg, args) -> int:
     from . import tax
     from .db import get_or_create_category
@@ -362,6 +433,17 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--days", type=int)
     a.add_parser("forget", help="remove the stored credential")
     s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("connect", help="connect a bank for read-only sync (human-only; never an MCP tool)")
+    a = s.add_subparsers(dest="target", required=True)
+    a.add_parser("teller", help="connect through Teller (recommended; needs your own Teller developer account)")
+    a.add_parser("plaid", help="connect through Plaid (coming next)")
+    a.add_parser("simplefin", help="connect with a SimpleFIN setup token")
+    a.add_parser("list", help="show connected banks (no secrets)")
+    x = a.add_parser("forget", help="revoke access and delete the stored credentials")
+    x.add_argument("provider", choices=("simplefin", "teller", "plaid"))
+    x.add_argument("--institution", help="only this institution")
+    s.set_defaults(fn=cmd_connect)
 
     s = sub.add_parser("tax", help="business tax helpers (for you and your preparer; not advice)")
     a = s.add_subparsers(dest="action", required=True)

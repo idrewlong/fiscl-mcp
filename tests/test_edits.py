@@ -24,7 +24,7 @@ def _groups(conn, cfg, **kw):
 # --- migration 3 -----------------------------------------------------------------------------
 
 
-def test_v1_database_migrates_to_3_with_backup(cfg):
+def test_v1_database_migrates_to_latest_with_backup(cfg):
     raw = sqlite3.connect(cfg.db_path)
     for sql in MIGRATIONS[:2]:
         raw.executescript(sql)
@@ -41,7 +41,7 @@ def test_v1_database_migrates_to_3_with_backup(cfg):
 
     conn = connect(cfg)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == len(MIGRATIONS) == 3
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == len(MIGRATIONS) == 4
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
         assert {"tags", "splits", "manual_assets", "goals", "txn_lines"} <= tables
         assert conn.execute("SELECT amount FROM txn_lines").fetchone()[0] == -5000  # data survived

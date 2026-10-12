@@ -169,6 +169,7 @@ _AUDIT_SAFE_KEYS = {
     "dry_run",
     "create_rule",
     "days",
+    "provider",
     "status",
     "kind",
     "min_confidence",

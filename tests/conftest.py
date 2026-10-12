@@ -65,3 +65,31 @@ def add_txn(
         ),
     )
     return int(cur.lastrowid)
+
+
+class FakeKeyring:
+    """An in-memory stand-in for the OS keychain."""
+
+    def __init__(self):
+        self.items: dict[tuple[str, str], str] = {}
+
+    def set_password(self, service, user, value):
+        self.items[(service, user)] = value
+
+    def get_password(self, service, user):
+        return self.items.get((service, user))
+
+    def delete_password(self, service, user):
+        if (service, user) not in self.items:
+            raise KeyError(user)
+        del self.items[(service, user)]
+
+
+@pytest.fixture
+def keychain(monkeypatch):
+    """Pretend a real OS keychain exists (the keyring package isn't installed in the test environment)."""
+    from fiscl.sync import base
+
+    kr = FakeKeyring()
+    monkeypatch.setattr(base, "keyring_backend", lambda: kr)
+    return kr

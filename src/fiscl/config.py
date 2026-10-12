@@ -53,6 +53,9 @@ class DebtTerms:
     min_payment: int  # minor units
 
 
+TELLER_ENVIRONMENTS = ("development", "sandbox", "production")
+
+
 @dataclass
 class Config:
     home: Path
@@ -64,6 +67,7 @@ class Config:
     guard: GuardConfig = field(default_factory=GuardConfig)
     tax: TaxConfig = field(default_factory=TaxConfig)
     debts: dict[str, DebtTerms] = field(default_factory=dict)
+    teller_environment: str = "development"  # [connectors.teller] environment
 
     @property
     def db_path(self) -> Path:
@@ -284,9 +288,13 @@ def load_config(home: Path | None = None) -> Config:
             tax.income_tax_rate_pct = str(rate)
     except (ValueError, InvalidOperation) as exc:
         raise ConfigError(f"[tax] section: {exc}") from exc
+    teller_env = (raw.get("connectors", {}).get("teller", {}) or {}).get("environment", "development")
+    if teller_env not in TELLER_ENVIRONMENTS:
+        raise ConfigError(f"connectors.teller.environment must be one of {', '.join(TELLER_ENVIRONMENTS)}")
     return Config(
         home=home,
         tax=tax,
+        teller_environment=teller_env,
         debts=_load_debts(raw.get("debts", {}), currency.upper()),
         currency=currency.upper(),
         timezone=str(raw.get("timezone", "America/Chicago")),

@@ -11,9 +11,7 @@ import base64
 import binascii
 import hashlib
 import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -22,57 +20,37 @@ from ..guard import clean_text
 from ..importers.core import ImportResult, import_statements
 from ..importers.types import ParsedStatement, ParsedTxn
 from ..money import AmountError, parse_amount
+from . import base
+from .base import TIMEOUT, Policy, SyncError, open_url
 
-KEYRING_SERVICE = "fiscl"
+__all__ = ["SyncError", "open_url"]
+
+# Legacy keychain entry, kept so existing connections keep working (other providers use fiscl:<provider>:<ref>).
+KEYRING_SERVICE = base.KEYRING_SERVICE
 KEYRING_USER = "simplefin_access_url"
 DEFAULT_ALLOWED_HOSTS = ("bridge.simplefin.org", "beta-bridge.simplefin.org")
 MAX_WINDOW_DAYS = 90
-TIMEOUT = 30
+_PATH = r"(?:/[\w.\-~%=]+)*"
 
 
-class SyncError(RuntimeError):
-    pass
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Never follow redirects: the allowlist is checked on the URL we build, and a redirect could
-    point anywhere (including plain http)."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-# TLS certificates and hostnames are verified by urllib's default HTTPS context.
-_OPENER = urllib.request.build_opener(_NoRedirect)
-
-
-def open_url(req: urllib.request.Request, timeout: float):
-    return _OPENER.open(req, timeout=timeout)
-
-
-def _http_error(exc: urllib.error.HTTPError) -> SyncError:
-    if 300 <= exc.code < 400:
-        return SyncError(f"SimpleFIN answered with a redirect (HTTP {exc.code}); fiscl doesn't follow redirects")
-    return SyncError(f"SimpleFIN returned HTTP {exc.code}")
+def _policy(allowed: tuple[str, ...]) -> Policy:
+    return Policy(
+        "SimpleFIN",
+        tuple(allowed),
+        routes=(("GET", _PATH + "/accounts"), ("POST", _PATH + "/claim/[\\w.\\-~%=]+")),
+    )
 
 
 def _keyring():
-    try:
-        import keyring  # optional dependency: pip install "fiscl[sync]"
-        from keyring.backends.fail import Keyring as FailKeyring
-    except ImportError as exc:
-        raise SyncError('bank sync needs the keyring package: pip install "fiscl[sync]"') from exc
-    if isinstance(keyring.get_keyring(), FailKeyring):
-        raise SyncError("no OS keychain is available on this machine; fiscl won't store bank credentials in plain text")
-    return keyring
+    return base.keyring_backend()
 
 
-def _check_host(url: str, allowed: tuple[str, ...]) -> urllib.parse.SplitResult:
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme != "https":
-        raise SyncError("SimpleFIN URLs must use https")
-    if (parts.hostname or "").lower() not in allowed:
-        raise SyncError(f"host {parts.hostname!r} is not in the SimpleFIN allowlist {list(allowed)}")
+def _check_access_url(access_url: str, allowed: tuple[str, ...]) -> urllib.parse.SplitResult:
+    """Validate scheme/host of an access URL (which embeds credentials) via the shared policy."""
+    parts = urllib.parse.urlsplit(access_url)
+    netloc = (parts.hostname or "") + (f":{parts.port}" if parts.port else "")
+    stripped = urllib.parse.urlunsplit((parts.scheme, netloc, parts.path.rstrip("/") + "/accounts", "", ""))
+    _policy(allowed).check("GET", stripped)
     return parts
 
 
@@ -82,18 +60,16 @@ def claim(setup_token: str, allowed: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS, op
         claim_url = base64.b64decode(setup_token.strip(), validate=True).decode()
     except (binascii.Error, UnicodeDecodeError) as exc:
         raise SyncError("that doesn't look like a SimpleFIN setup token") from exc
-    _check_host(claim_url, allowed)
-    req = urllib.request.Request(claim_url, method="POST", data=b"", headers={"Content-Length": "0"})
     try:
-        with opener(req, timeout=TIMEOUT) as resp:
-            access_url = resp.read().decode().strip()
-    except urllib.error.HTTPError as exc:
-        if 300 <= exc.code < 400:
-            raise _http_error(exc) from exc
-        raise SyncError(f"claim failed with HTTP {exc.code}; setup tokens can only be used once") from exc
-    except urllib.error.URLError as exc:
-        raise SyncError(f"couldn't reach SimpleFIN: {exc.reason}") from exc
-    _check_host(access_url, allowed)
+        _, body = base.request(
+            _policy(allowed), "POST", claim_url, headers={"Content-Length": "0"}, data=b"", opener=opener
+        )
+    except SyncError as exc:
+        if exc.status is not None and not 300 <= exc.status < 400:
+            raise SyncError(f"claim failed with HTTP {exc.status}; setup tokens can only be used once") from exc
+        raise
+    access_url = body.decode().strip()
+    _check_access_url(access_url, allowed)
     _keyring().set_password(KEYRING_SERVICE, KEYRING_USER, access_url)
     return urllib.parse.urlsplit(access_url).hostname or ""
 
@@ -104,6 +80,13 @@ def forget() -> None:
         kr.delete_password(KEYRING_SERVICE, KEYRING_USER)
     except Exception:
         pass
+
+
+def is_connected() -> bool:
+    try:
+        return bool(_keyring().get_password(KEYRING_SERVICE, KEYRING_USER))
+    except SyncError:
+        return False
 
 
 def _guess_type(name: str) -> str:
@@ -180,9 +163,9 @@ def parse_accounts(payload: dict, tz: ZoneInfo) -> tuple[list[ParsedStatement], 
 
 
 def fetch(access_url: str, start: date, end: date, allowed: tuple[str, ...], opener=open_url) -> dict:
-    parts = _check_host(access_url, allowed)
+    parts = _check_access_url(access_url, allowed)
     netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
-    base = urllib.parse.urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", ""))
+    base_url = urllib.parse.urlunsplit((parts.scheme, netloc, parts.path.rstrip("/"), "", ""))
     query = urllib.parse.urlencode(
         {
             "start-date": int(datetime(start.year, start.month, start.day, tzinfo=UTC).timestamp()),
@@ -190,20 +173,46 @@ def fetch(access_url: str, start: date, end: date, allowed: tuple[str, ...], ope
             "pending": 1,
         }
     )
-    req = urllib.request.Request(f"{base}/accounts?{query}")
     token = base64.b64encode(
         f"{urllib.parse.unquote(parts.username or '')}:{urllib.parse.unquote(parts.password or '')}".encode()
     ).decode()
-    req.add_unredirected_header("Authorization", f"Basic {token}")
     try:
-        with opener(req, timeout=TIMEOUT) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        if exc.code == 403:
-            raise SyncError("SimpleFIN rejected the stored access (403). Run `fiscl sync setup` again.") from exc
-        raise _http_error(exc) from exc
-    except urllib.error.URLError as exc:
-        raise SyncError(f"couldn't reach SimpleFIN: {exc.reason}") from exc
+        _, body = base.request(
+            _policy(allowed),
+            "GET",
+            f"{base_url}/accounts?{query}",
+            secret_headers={"Authorization": f"Basic {token}"},
+            opener=opener,
+            timeout=TIMEOUT,
+        )
+    except SyncError as exc:
+        if exc.status == 403:
+            raise SyncError("SimpleFIN rejected the stored access (403). Run `fiscl sync setup` again.", 403) from exc
+        raise
+    return json.loads(body.decode())
+
+
+class SimpleFinConnector:
+    """`Connector` over the SimpleFIN access URL in the keychain (the CLI/MCP path uses `sync()` below, which
+    also de-duplicates identical payloads)."""
+
+    provider = "simplefin"
+
+    def __init__(self, cfg: Config, access_url: str | None = None, opener=open_url) -> None:
+        self.cfg, self._access_url, self._opener = cfg, access_url, opener
+        self.warnings: list[str] = []
+
+    def fetch(self, start: date, end: date) -> list[ParsedStatement]:
+        url = self._access_url or _keyring().get_password(KEYRING_SERVICE, KEYRING_USER)
+        if not url:
+            raise SyncError("no SimpleFIN connection yet. Run `fiscl connect simplefin`.")
+        payload = fetch(url, start, end, DEFAULT_ALLOWED_HOSTS, self._opener)
+        statements, warns = parse_accounts(payload, ZoneInfo(self.cfg.timezone))
+        self.warnings += warns
+        return statements
+
+    def forget(self) -> None:
+        forget()
 
 
 def sync(
