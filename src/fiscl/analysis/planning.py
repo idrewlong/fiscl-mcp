@@ -10,7 +10,7 @@ import sqlite3
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
-from ..common import account_id, check_items, meta, money_arg, plan_result
+from ..common import account_id, check_items, find_account, meta, money_arg, plan_result, with_meta
 from ..config import Config
 from ..guard import GuardError, choice, clean_text, parse_date
 from ..money import amount, pct
@@ -30,11 +30,6 @@ MAX_NOTE = 200
 
 _money = amount  # afford() has an `amount` argument that shadows the formatter
 _date = date
-
-
-def _with_meta(conn, cfg: Config, result: dict, **extra) -> dict:
-    result["meta"] = meta(conn, cfg, **extra)
-    return result
 
 
 def _name(value, field="name") -> str:
@@ -153,7 +148,7 @@ def manage_asset(
             )
         else:
             conn.execute("DELETE FROM manual_assets WHERE id = ?", (row["id"],))
-    return _with_meta(conn, cfg, plan_result(plan, 0, dry_run, "Call again with dry_run=false to apply."))
+    return with_meta(conn, cfg, plan_result(plan, 0, dry_run, "Call again with dry_run=false to apply."))
 
 
 # --- net worth -----------------------------------------------------------------------------
@@ -392,7 +387,7 @@ def _debts_from_args(conn, cfg: Config, debts) -> tuple[list[dict], list[str], l
         terms = cfg.debts.get(name.lower())
         balance = money_arg(item.get("balance"), cfg, f"{where} balance")
         if balance is None:
-            acct = conn.execute("SELECT id FROM accounts WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+            acct = find_account(conn, name)
             rolled = rolled_balance(conn, acct["id"]) if acct else None
             if rolled is not None and rolled[0] < 0:
                 balance = -rolled[0]
@@ -580,7 +575,7 @@ def debt_payoff(conn, cfg: Config, extra_monthly=0, strategy="both", debts=None,
         f"Simulation stops at {MAX_PAYOFF_MONTHS} months.",
         *notes,
     ]
-    return _with_meta(conn, cfg, out, row_count=len(items))
+    return with_meta(conn, cfg, out, row_count=len(items))
 
 
 # --- goals ---------------------------------------------------------------------------------
@@ -702,7 +697,7 @@ def manage_goal(
                     row["id"],
                 ),
             )
-    return _with_meta(conn, cfg, plan_result(plan, 0, dry_run, "Call again with dry_run=false to apply."))
+    return with_meta(conn, cfg, plan_result(plan, 0, dry_run, "Call again with dry_run=false to apply."))
 
 
 def _goal_progress_row(conn, cfg: Config, g: sqlite3.Row, today: date) -> dict:

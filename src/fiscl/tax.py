@@ -14,10 +14,12 @@ from .common import (
     check_bulk,
     check_items,
     count_by,
+    find_account,
     meta,
     plan_result,
     resolve_target,
     target_of,
+    with_meta,
     without_split_parents,
     year_bounds,
 )
@@ -305,7 +307,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
     sections: dict[str, list] = {}
 
     personal = conn.execute(
-        f"""SELECT t.merchant, COUNT(*) AS n, -SUM(t.amount) AS spent, MAX(t.posted_date) AS last,
+        f"""SELECT t.merchant, COUNT(DISTINCT t.id) AS n, -SUM(t.amount) AS spent, MAX(t.posted_date) AS last,
                    GROUP_CONCAT(DISTINCT c.name) AS cats
             FROM {TXN_FROM}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'personal' AND {SPENDING_FILTER}
@@ -368,7 +370,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
         ]
 
     mixed = conn.execute(
-        """SELECT a.name, COUNT(*) AS n FROM txn_lines t JOIN accounts a ON a.id = t.account_id
+        """SELECT a.name, COUNT(DISTINCT t.id) AS n FROM txn_lines t JOIN accounts a ON a.id = t.account_id
            WHERE a.scope = 'mixed' AND t.scope IS NULL AND t.transfer_group IS NULL
              AND t.posted_date BETWEEN ? AND ? GROUP BY a.id""",
         span,
@@ -383,7 +385,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
     ]
 
     income = conn.execute(
-        f"""SELECT t.merchant, COUNT(*) AS n, SUM(t.amount) AS total, GROUP_CONCAT(DISTINCT c.name) AS cats
+        f"""SELECT t.merchant, COUNT(DISTINCT t.id) AS n, SUM(t.amount) AS total, GROUP_CONCAT(DISTINCT c.name) AS cats
             FROM {TXN_FROM}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'personal' AND t.transfer_group IS NULL
               AND t.amount > 0 AND COALESCE(c.name, '') NOT IN ('Income: Salary', 'Income: Interest')
@@ -442,12 +444,9 @@ def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
         if "account" in item:
             if scope not in ("personal", "business", "mixed"):
                 raise GuardError(f"item {i}: account scope must be personal, business, or mixed")
-            acct = conn.execute(
-                "SELECT id, name, scope FROM accounts WHERE name = ? COLLATE NOCASE",
-                (clean_text(str(item["account"]), 120),),
-            ).fetchone()
+            acct = find_account(conn, clean_text(str(item["account"]), 120))
             if acct is None:
-                raise GuardError(f"item {i}: unknown account {item['account']!r}")
+                raise GuardError(f"item {i}: unknown account; list_accounts shows them", code="not_found")
             plan.append({"target": {"account": acct["name"]}, "from": acct["scope"], "to": scope, "_acct": acct["id"]})
             continue
         if scope not in ("personal", "business"):
@@ -473,8 +472,7 @@ def set_scope(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
             else:
                 conn.executemany("UPDATE transactions SET scope = ? WHERE id = ?", [(p["to"], t) for t in p["_ids"]])
     result = plan_result(plan, total, dry_run, "Call again with dry_run=false to apply.")
-    result["meta"] = meta(conn, cfg)
-    return result
+    return with_meta(conn, cfg, result)
 
 
 def log_trip(conn, cfg: Config, trip_date: str, miles, purpose: str, vehicle=None, dry_run=True) -> dict:

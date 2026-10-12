@@ -35,9 +35,10 @@ def test_limit_is_capped_by_hard_max(conn, cfg, accounts):
     assert r["meta"]["row_count"] == 0  # no data, but no error
 
 
-def test_unknown_account_lists_real_ones(conn, cfg, accounts):
-    with pytest.raises(GuardError, match="Checking"):
+def test_unknown_account_error_does_not_echo_or_list_names(conn, cfg, accounts):
+    with pytest.raises(GuardError, match="list_accounts") as exc:
         analysis.query_transactions(conn, cfg, account="Nope", today=TODAY)
+    assert "Nope" not in str(exc.value) and "Checking" not in str(exc.value)
 
 
 def test_budget_pace_projection(conn, cfg, accounts):

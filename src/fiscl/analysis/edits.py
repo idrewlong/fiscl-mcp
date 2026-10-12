@@ -8,16 +8,17 @@ from __future__ import annotations
 from ..categorize import append_merchant_rule
 from ..common import (
     MAX_TAGS_PER_ITEM,
+    account_id,
     check_bulk,
     check_items,
     clean_tag,
     count_by,
-    meta,
     money_arg,
     plan_result,
     resolve_target,
     target_of,
     valid_id,
+    with_meta,
     without_split_parents,
 )
 from ..config import Config
@@ -66,12 +67,7 @@ def apply_categories(conn, cfg: Config, items: list[dict], create_rule=False, dr
             if p["creates_rule"]:
                 append_merchant_rule(cfg, p["target"]["merchant"], p["category"])
     result = plan_result(plan, total_rows, dry_run, "Call again with dry_run=false to apply these changes.")
-    return _with_meta(conn, cfg, result)
-
-
-def _with_meta(conn, cfg: Config, result: dict) -> dict:
-    result["meta"] = meta(conn, cfg)
-    return result
+    return with_meta(conn, cfg, result)
 
 
 def _transaction(conn, transaction_id) -> dict:
@@ -104,7 +100,7 @@ def add_note(conn, cfg: Config, transaction_id=None, note=None, dry_run=True) ->
     ]
     if not dry_run:
         conn.execute("UPDATE transactions SET note = ? WHERE id = ?", (new, txn["id"]))
-    return _with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to save this note."))
+    return with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to save this note."))
 
 
 def tag_transactions(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
@@ -165,7 +161,7 @@ def tag_transactions(conn, cfg: Config, items: list[dict], dry_run=True) -> dict
                 "DELETE FROM tags WHERE transaction_id = ? AND tag = ?",
                 [(tid, tag) for tid in p["_ids"] for tag in p["remove"]],
             )
-    return _with_meta(conn, cfg, plan_result(plan, total_rows, dry_run, "Call again with dry_run=false to apply."))
+    return with_meta(conn, cfg, plan_result(plan, total_rows, dry_run, "Call again with dry_run=false to apply."))
 
 
 def dismiss_recurring(conn, cfg: Config, merchant=None, account=None, direction=None, undo=False, dry_run=True) -> dict:
@@ -175,13 +171,8 @@ def dismiss_recurring(conn, cfg: Config, merchant=None, account=None, direction=
         raise GuardError("merchant is required")
     where, params = ["merchant = ? COLLATE NOCASE"], [merchant]
     if account:
-        acct = conn.execute(
-            "SELECT id FROM accounts WHERE name = ? COLLATE NOCASE", (clean_text(account, 120),)
-        ).fetchone()
-        if acct is None:
-            raise GuardError(f"unknown account {account!r}")
         where.append("account_id = ?")
-        params.append(acct["id"])
+        params.append(account_id(conn, clean_text(str(account), 120)))
     if direction is not None:
         where.append("direction = ?")
         params.append(choice(direction, ("out", "in"), "direction"))
@@ -192,13 +183,15 @@ def dismiss_recurring(conn, cfg: Config, merchant=None, account=None, direction=
             f"SELECT merchant, account_id, direction FROM recurring_dismissed WHERE {clause}", params
         ).fetchall()
         if not rows:
-            raise GuardError(f"{merchant!r} isn't dismissed (check merchant, account, direction)")
+            raise GuardError("nothing matching is dismissed (check merchant, account, direction)", code="not_found")
     else:
         rows = conn.execute(
             f"SELECT id, merchant, account_id, direction FROM recurring WHERE {clause}", params
         ).fetchall()
         if not rows:
-            raise GuardError(f"no detected recurring item for {merchant!r}; check detect_recurring for the merchant")
+            raise GuardError(
+                "no detected recurring item for that merchant; list_recurring shows what is detected", code="not_found"
+            )
     names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM accounts")}
     plan = [
         {
@@ -223,7 +216,7 @@ def dismiss_recurring(conn, cfg: Config, merchant=None, account=None, direction=
     step = "Call again with dry_run=false to apply."
     if undo:
         step += " The item reappears at the next import or recurring refresh."
-    return _with_meta(conn, cfg, plan_result(plan, 0, dry_run, step))
+    return with_meta(conn, cfg, plan_result(plan, 0, dry_run, step))
 
 
 def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
@@ -238,8 +231,10 @@ def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
         if not minor:
             raise GuardError(f"part {i}: amount is required and can't be zero")
         if (minor < 0) != negative:
-            example = amount(-abs(minor) if negative else abs(minor), cfg.currency)["display"]
-            raise GuardError(f"part {i}: amount must have the same sign as the transaction (e.g. {example})")
+            raise GuardError(
+                f"part {i}: amount must have the same sign as the transaction "
+                f"({'negative' if negative else 'positive'})"
+            )
         category = clean_text(str(part.get("category") or ""), 60)
         if not category:
             raise GuardError(f"part {i}: category is required")
@@ -252,11 +247,7 @@ def _split_parts(parts, parent: dict, cfg: Config) -> list[dict]:
         out.append({"minor": minor, "category": category, "scope": scope, "note": note})
     total = sum(p["minor"] for p in out)
     if total != parent["amount"]:
-        raise GuardError(
-            f"parts sum to {amount(total, cfg.currency)['display']} but the transaction is "
-            f"{amount(parent['amount'], cfg.currency)['display']}; they must match exactly",
-            code="sum_mismatch",
-        )
+        raise GuardError("parts don't add up to the transaction amount; they must match exactly", code="sum_mismatch")
     return out
 
 
@@ -299,4 +290,4 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
                 "INSERT INTO splits (transaction_id, amount, category_id, scope, note) VALUES (?, ?, ?, ?, ?)",
                 (parent["id"], p["minor"], get_or_create_category(conn, p["category"]), p["scope"], p["note"]),
             )
-    return _with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to apply."))
+    return with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to apply."))

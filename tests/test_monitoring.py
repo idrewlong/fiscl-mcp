@@ -43,6 +43,7 @@ def world(conn, cfg, accounts):
     add_txn(conn, chk, "2026-09-20", -1099, "APPLE MUSIC", "Subscriptions")
     add_txn(conn, chk, "2026-08-01", -99, "STREAMLY TRIAL", "Subscriptions")
     add_txn(conn, chk, "2026-08-15", -1599, "STREAMLY TRIAL", "Subscriptions")
+    add_txn(conn, chk, "2026-09-14", -1599, "STREAMLY TRIAL", "Subscriptions")
     # Refunds.
     add_txn(conn, chk, "2026-09-10", -12000, "SHOES R US", "Shopping")
     add_txn(conn, chk, "2026-10-05", 12000, "SHOES R US", "Shopping")
@@ -148,6 +149,15 @@ def test_watchdog_lists_annual_renewals_due_soon(conn, cfg, accounts):
     assert r["annual_renewals"][0]["due"] == "2026-10-25"
 
 
+def test_watchdog_ignores_a_one_off_purchase_after_a_tiny_first_charge(conn, cfg, world, accounts):
+    chk = accounts["checking"]
+    add_txn(conn, chk, "2026-09-01", -50, "CORNER KIOSK", "Shopping")
+    add_txn(conn, chk, "2026-09-10", -4000, "CORNER KIOSK", "Shopping")
+    conn.commit()
+    r = analysis.subscription_watchdog(conn, cfg, today=TODAY)
+    assert [t["merchant"] for t in r["trials_turned_paid"]] == ["Streamly Trial"]
+
+
 def test_refund_tracker_matches_received_and_lists_expected(conn, cfg, world):
     r = analysis.refund_tracker(conn, cfg, today=TODAY)
     got = r["received_refunds"]
@@ -167,6 +177,33 @@ def test_refund_arrival_clears_expected_and_partial_stays(conn, cfg, world, acco
     assert r["expected_refunds"][0]["received_so_far"]["minor"] == 3000
     add_txn(conn, chk, "2026-10-09", 5000, "GADGET SHOP", "Shopping")
     assert analysis.refund_tracker(conn, cfg, today=TODAY)["expected_refunds"] == []
+
+
+def test_one_credit_clears_only_one_of_two_tagged_purchases(conn, cfg, accounts):
+    chk = accounts["checking"]
+    for d in ("2026-09-01", "2026-09-05"):
+        tid = add_txn(conn, chk, d, -5000, "TWIN STORE", "Shopping")
+        conn.execute("INSERT INTO tags (transaction_id, tag) VALUES (?, 'refund-pending')", (tid,))
+    add_txn(conn, chk, "2026-10-01", 5000, "TWIN STORE", "Shopping")
+    conn.commit()
+    r = analysis.refund_tracker(conn, cfg, today=TODAY)
+    assert len(r["expected_refunds"]) == 1
+    assert r["expected_refunds"][0]["purchase_date"] == "2026-09-05"  # oldest purchase consumed the credit
+    assert r["expected_refunds"][0]["received_so_far"]["minor"] == 0
+    assert r["totals"]["expected"]["minor"] == 5000
+
+
+def test_partial_credit_spills_across_tagged_purchases(conn, cfg, accounts):
+    chk = accounts["checking"]
+    for d in ("2026-09-01", "2026-09-05"):
+        tid = add_txn(conn, chk, d, -5000, "TWIN STORE", "Shopping")
+        conn.execute("INSERT INTO tags (transaction_id, tag) VALUES (?, 'refund-pending')", (tid,))
+    add_txn(conn, chk, "2026-10-01", 7000, "TWIN STORE", "Shopping")
+    conn.commit()
+    r = analysis.refund_tracker(conn, cfg, today=TODAY)
+    assert len(r["expected_refunds"]) == 1
+    assert r["expected_refunds"][0]["received_so_far"]["minor"] == 2000
+    assert r["totals"]["expected"]["minor"] == 3000
 
 
 def test_refund_tracker_validates_days(conn, cfg, world):

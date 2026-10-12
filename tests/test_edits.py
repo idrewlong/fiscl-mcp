@@ -41,10 +41,12 @@ def test_v1_database_migrates_to_latest_with_backup(cfg):
 
     conn = connect(cfg)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == len(MIGRATIONS) == 4
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == len(MIGRATIONS)
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")}
         assert {"tags", "splits", "manual_assets", "goals", "txn_lines"} <= tables
-        assert conn.execute("SELECT amount FROM txn_lines").fetchone()[0] == -5000  # data survived
+        kept = conn.execute("SELECT merchant, amount FROM transactions").fetchall()
+        assert [(r["merchant"], r["amount"]) for r in kept] == [("Kroger", -5000)]  # the v1 row survived
+        assert conn.execute("SELECT amount FROM txn_lines").fetchone()[0] == -5000
         backups = list(cfg.backups.glob("fiscl-*-pre-migration.db"))
         assert len(backups) == 1 and stat.S_IMODE(backups[0].stat().st_mode) == 0o600
         old = sqlite3.connect(backups[0])
@@ -182,6 +184,28 @@ def test_split_changes_spending_and_schedule_c_line_22(conn, cfg, accounts):
     assert cf["totals"]["spending"]["minor"] == 13000
 
 
+def test_split_counts_the_purchase_once_outside_category_grouping(conn, cfg, accounts):
+    t = _amazon(conn, accounts)
+    parts = [{"amount": -60, "category": "Groceries"}, {"amount": -40, "category": "Business: Supplies"}]
+    analysis.split_transaction(conn, cfg, transaction_id=t, parts=parts, dry_run=False)
+    kw = {"from_": "2026-10-01", "to": "2026-10-12", "today": TODAY}
+    by_merchant = analysis.spending_summary(conn, cfg, group_by="merchant", **kw)
+    assert {g["name"]: g["count"] for g in by_merchant["groups"]}["Amazon"] == 1
+    by_cat = analysis.spending_summary(conn, cfg, group_by="category", **kw)
+    assert {g["name"]: g["count"] for g in by_cat["groups"]}["Groceries"] == 1
+    figma = add_txn(conn, accounts["checking"], "2026-10-07", -5000, "FIGMA", "Software")
+    analysis.split_transaction(
+        conn,
+        cfg,
+        transaction_id=figma,
+        parts=[{"amount": -30, "category": "Software"}, {"amount": -20, "category": "Shopping"}],
+        dry_run=False,
+    )
+    r = tax.review_writeoffs(conn, cfg, year=2026, today=TODAY)
+    row = next(x for x in r["sections"]["possibly_business_in_personal"] if x["merchant"] == "Figma")
+    assert row["count"] == 1
+
+
 def test_split_listing_shows_parent_with_splits_array(conn, cfg, accounts):
     t = _amazon(conn, accounts)
     parts = [{"amount": -60, "category": "Groceries"}, {"amount": -40, "category": "Business: Supplies"}]
@@ -303,7 +327,7 @@ def test_dismiss_recurring_errors(conn, cfg, accounts):
     merchant = _netflix(conn, cfg, accounts)
     with pytest.raises(GuardError, match="no detected recurring"):
         analysis.dismiss_recurring(conn, cfg, merchant="Nothing")
-    with pytest.raises(GuardError, match="isn't dismissed"):
+    with pytest.raises(GuardError, match="nothing matching is dismissed"):
         analysis.dismiss_recurring(conn, cfg, merchant=merchant, undo=True)
     with pytest.raises(GuardError):
         analysis.dismiss_recurring(conn, cfg, merchant=merchant, direction="sideways")

@@ -32,6 +32,12 @@ def data_freshness(conn: sqlite3.Connection) -> list[dict]:
     return [{"account": r["name"], "latest_transaction": r["latest"]} for r in rows]
 
 
+def with_meta(conn, cfg: Config, result: dict, **extra) -> dict:
+    """Attach `meta` to a response (used by writes, whose dry-run envelope has none of its own)."""
+    result["meta"] = meta(conn, cfg, **extra)
+    return result
+
+
 def meta(conn, cfg: Config, start: date | None = None, end: date | None = None, **extra) -> dict:
     out: dict[str, Any] = {"currency": cfg.currency, "data_freshness": data_freshness(conn)}
     if start and end:
@@ -62,14 +68,21 @@ def valid_id(value, field: str = "transaction_id") -> int:
     return value
 
 
-def account_id(conn, name: str | None) -> int | None:
+def find_account(conn, name: str | None) -> sqlite3.Row | None:
+    """The account with this name (case-insensitive), or None."""
     if not name:
         return None
-    row = conn.execute("SELECT id FROM accounts WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    return conn.execute("SELECT id, name, scope FROM accounts WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+
+
+def account_id(conn, name: str | None) -> int | None:
+    """An account's id from its name; None when no name is given. Unknown names raise (without echoing the name)."""
+    if not name:
+        return None
+    row = find_account(conn, name)
     if row is None:
-        names = [r[0] for r in conn.execute("SELECT name FROM accounts WHERE archived = 0")]
-        raise GuardError(f"unknown account {name!r}. Accounts: {', '.join(names) or 'none yet'}")
-    return row[0]
+        raise GuardError("unknown account; list_accounts shows them", code="not_found")
+    return row["id"]
 
 
 def year_bounds(year: int | None, today: date | None = None) -> tuple[int, date, date]:

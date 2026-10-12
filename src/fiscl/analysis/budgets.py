@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
-from ..common import check_items, meta, money_arg, plan_result
+from ..common import check_items, meta, money_arg, plan_result, with_meta
 from ..config import Budget, Config, load_budgets, write_budgets
 from ..db import SPENDING_FILTER, TXN_FROM
 from ..guard import GuardError, clean_text, parse_month
@@ -147,14 +147,14 @@ def set_budget(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
             raise GuardError(f"item {i}: category is required")
         key = category.lower()
         if key in seen:
-            raise GuardError(f"item {i}: {category!r} appears twice")
+            raise GuardError(f"item {i}: that category appears twice")
         seen.add(key)
         if "monthly" not in item:
             raise GuardError(f"item {i}: monthly is required (dollars, or null to remove the budget)")
         old = current.get(key)
         if item["monthly"] is None:
             if old is None:
-                raise GuardError(f"item {i}: no budget exists for {category!r}")
+                raise GuardError(f"item {i}: no budget exists for that category", code="not_found")
             del after[key]
             plan.append({"category": old.category, "action": "remove", "before": _line(old, cfg), "after": None})
             continue
@@ -184,5 +184,4 @@ def set_budget(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
         write_budgets(cfg, list(after.values()))
     result = plan_result(plan, 0, dry_run, "Call again with dry_run=false to write budgets.toml (a .bak is kept).")
     result["budgets_after"] = [_line(b, cfg) for b in sorted(after.values(), key=lambda b: b.category.lower())]
-    result["meta"] = meta(conn, cfg)
-    return result
+    return with_meta(conn, cfg, result)

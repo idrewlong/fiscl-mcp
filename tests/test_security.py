@@ -185,7 +185,7 @@ async def test_tool_error_text_is_redacted_for_the_model(cfg):
         r = await c.call_tool("merchant_history", {"merchant": "4111111111111111"})
     assert r.is_error
     text = json.dumps([getattr(x, "text", "") for x in r.content], ensure_ascii=False)
-    assert "4111111111111111" not in text and "••••1111" in text
+    assert "4111111111111111" not in text  # not echoed at all; redact() is the backstop
 
 
 def test_backup_file_is_private_even_if_original_is_loose(tmp_path):
@@ -201,3 +201,86 @@ def test_backup_file_is_private_even_if_original_is_loose(tmp_path):
     os.chmod(bak, 0o666)  # an existing loose .bak is tightened on the next backup
     backup_file(src)
     assert stat.S_IMODE(bak.stat().st_mode) == 0o600
+
+
+# --- error text never echoes merchant/account/asset/goal names or amounts ----------------------------
+
+SECRET_MERCHANT = "Quixotic Goods"
+SECRET_ACCOUNT = "Zorbal Checking"
+SECRET_ASSET = "Vintage Zeppelin"
+SECRET_GOAL = "Moon Cabin"
+SECRET_CATEGORY = "Obscure Hobby"
+
+
+def _error_cases(conn, cfg):
+    from datetime import date
+
+    from fiscl import analysis, tax
+    from fiscl.db import add_account
+    from fiscl.sync import registry
+
+    from .conftest import add_txn
+
+    acct = add_account(conn, SECRET_ACCOUNT, "checking")
+    outflow = add_txn(conn, acct, "2026-10-01", -123456, SECRET_MERCHANT.upper(), "Shopping")
+    conn.commit()
+    today = date(2026, 10, 12)
+    bad_account = "Missing Ledger Name"
+    return {
+        "spending_summary/account": lambda: analysis.spending_summary(conn, cfg, account=bad_account, today=today),
+        "query_transactions/account": lambda: analysis.query_transactions(conn, cfg, account=bad_account, today=today),
+        "dismiss_recurring/account": lambda: analysis.dismiss_recurring(
+            conn, cfg, merchant=SECRET_MERCHANT, account=bad_account
+        ),
+        "dismiss_recurring/none_detected": lambda: analysis.dismiss_recurring(
+            conn, cfg, merchant=SECRET_MERCHANT, account=SECRET_ACCOUNT
+        ),
+        "dismiss_recurring/undo": lambda: analysis.dismiss_recurring(conn, cfg, merchant=SECRET_MERCHANT, undo=True),
+        "split_transaction/sum_mismatch": lambda: analysis.split_transaction(
+            conn, cfg, transaction_id=outflow, parts=[{"amount": -5, "category": "A"}, {"amount": -6, "category": "B"}]
+        ),
+        "split_transaction/sign": lambda: analysis.split_transaction(
+            conn, cfg, transaction_id=outflow, parts=[{"amount": 5, "category": "A"}, {"amount": -6, "category": "B"}]
+        ),
+        "merchant_history": lambda: analysis.merchant_history(conn, cfg, merchant="Never Seen Merchant", today=today),
+        "category_trend": lambda: analysis.category_trend(conn, cfg, category=SECRET_CATEGORY, today=today),
+        "set_budget/remove_missing": lambda: analysis.set_budget(
+            conn, cfg, [{"category": SECRET_CATEGORY, "monthly": None}]
+        ),
+        "set_budget/duplicate": lambda: analysis.set_budget(
+            conn, cfg, [{"category": SECRET_CATEGORY, "monthly": 5}, {"category": SECRET_CATEGORY, "monthly": 6}]
+        ),
+        "set_scope/account": lambda: tax.set_scope(conn, cfg, [{"account": bad_account, "scope": "business"}]),
+        "manage_asset/update_missing": lambda: analysis.manage_asset(
+            conn, cfg, action="update", name=SECRET_ASSET, value=250000, today=today
+        ),
+        "manage_goal/update_missing": lambda: analysis.manage_goal(
+            conn, cfg, action="update", name=SECRET_GOAL, target=9000, today=today
+        ),
+        "manage_goal/account": lambda: analysis.manage_goal(
+            conn, cfg, action="add", name=SECRET_GOAL, target=9000, account=bad_account, today=today
+        ),
+        "sync_accounts/not_connected": lambda: registry.sync_accounts(conn, cfg, provider="teller"),
+    }
+
+
+def test_error_text_never_echoes_names_or_amounts(conn, cfg):
+    from fiscl.guard import GuardError
+
+    secrets = [
+        SECRET_MERCHANT,
+        SECRET_ACCOUNT,
+        SECRET_ASSET,
+        SECRET_GOAL,
+        SECRET_CATEGORY,
+        "Missing Ledger Name",
+        "Never Seen Merchant",
+    ]
+    for label, call in _error_cases(conn, cfg).items():
+        with pytest.raises(GuardError) as exc:
+            call()
+        text = str(exc.value)
+        lowered = text.lower()
+        assert not any(name.lower() in lowered for name in secrets), (label, text)
+        assert "$" not in text and "1234" not in text, (label, text)
+        assert getattr(exc.value, "code", None), (label, "errors carry a stable code")

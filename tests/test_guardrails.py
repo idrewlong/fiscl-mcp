@@ -43,8 +43,9 @@ def test_core_makes_no_network_calls(conn, cfg, monkeypatch):
     analysis.category_trend(conn, cfg, category="Groceries", today=TODAY)
     analysis.manage_asset(conn, cfg, action="add", name="Truck", kind="vehicle", value=1, today=TODAY)
     analysis.manage_goal(conn, cfg, action="add", name="Trip", target=10, today=TODAY)
-    for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget"):
+    for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget", "net_worth"):
         build_chart(conn, cfg, kind=kind, today=TODAY)
+    build_chart(conn, cfg, kind="category_trend", category="Groceries", today=TODAY)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")

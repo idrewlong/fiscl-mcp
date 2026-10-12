@@ -330,7 +330,8 @@ def subscription_watchdog(conn, cfg: Config, today=None) -> dict:
     recurring = conn.execute("SELECT * FROM recurring WHERE direction = 'out' AND status != 'cancelled'").fetchall()
     active_names = {r["merchant"].lower() for r in recurring}
 
-    # Trials that turned paid: first-ever charge of $1 or less, then a real charge within 45 days.
+    # Trials that turned paid: first-ever charge of $1 or less, then real charges within 45 days
+    # (a repeat, or a detected recurring item).
     since = (today - timedelta(days=HISTORY_DAYS)).isoformat()
     rows = conn.execute(
         f"""SELECT t.id, t.posted_date, -t.amount AS spent, t.merchant
@@ -358,6 +359,11 @@ def subscription_watchdog(conn, cfg: Config, today=None) -> dict:
             None,
         )
         if paid is None or paid["posted_date"] < since:
+            continue
+        # One full-price purchase after a tiny first charge is usually just a purchase: ask for a repeat or a
+        # detected recurring item.
+        later_paid = [c for c in charges[1:] if c["spent"] > TRIAL_MAX]
+        if len(later_paid) < 2 and key not in active_names:
             continue
         trials.append(
             {
@@ -550,12 +556,20 @@ def refund_tracker(conn, cfg: Config, days=90, today=None) -> dict:
                   AND LOWER(t.merchant) IN ({",".join("?" * len(merchants))})""",
             merchants,
         ):
-            credits[r["m"]].append(r)
+            credits[r["m"]].append([r["posted_date"], r["amount"]])
+    for pool in credits.values():
+        pool.sort(key=lambda c: c[0])
     expected = []
+    # Oldest purchase first, drawing each merchant's credits down so one credit is never counted twice.
     for p in tagged:
-        got = sum(
-            c["amount"] for c in credits.get((p["merchant"] or "").lower(), []) if c["posted_date"] >= p["posted_date"]
-        )
+        got = 0
+        for credit in credits.get((p["merchant"] or "").lower(), []):
+            if got >= p["spent"]:
+                break
+            if credit[0] >= p["posted_date"] and credit[1] > 0:
+                take = min(credit[1], p["spent"] - got)
+                credit[1] -= take
+                got += take
         if got >= p["spent"]:
             continue
         expected.append(
