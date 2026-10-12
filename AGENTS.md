@@ -32,7 +32,7 @@ src/fiscl/
     edits.py         apply_categories, add_note, tag_transactions, split_transaction, dismiss_recurring
     planning.py      manage_asset, net_worth, afford, debt_payoff, manage_goal, goal_progress
     monitoring.py    find_anomalies, subscription_watchdog, refund_tracker
-  tax.py           Schedule C, estimated tax, write-off review, set_scope, log_trip, mileage_log
+  tax/             lines (constants, DISCLAIMER, line_for) · schedule_c · estimates · review (write-off questions) · edits (set_scope, log_trip, mileage_log)
   common.py        shared service helpers: meta, with_meta, money_arg, account_id/find_account, scope/txn filters, year_bounds,
                    resolve_target, dry-run plan_result, bulk limits
   db.py            schema migrations, TXN_FROM join, SCOPE_SQL / SPENDING_FILTER / INCOME_FILTER, backups

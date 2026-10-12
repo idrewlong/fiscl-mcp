@@ -1,0 +1,478 @@
+{
+  "estimated_tax": {
+    "due_dates": [
+      {
+        "date": "2026-04-15",
+        "passed": true
+      },
+      {
+        "date": "2026-06-15",
+        "passed": true
+      },
+      {
+        "date": "2026-09-15",
+        "passed": true
+      },
+      {
+        "date": "2027-01-15",
+        "passed": false
+      }
+    ],
+    "income_tax_estimate": {
+      "display": "$7,607.44",
+      "minor": 760744
+    },
+    "income_tax_rate_pct": "22",
+    "meta": {
+      "currency": "USD",
+      "data_freshness": [
+        {
+          "account": "Demo Business Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Credit Card",
+          "latest_transaction": "2026-10-10"
+        },
+        {
+          "account": "Demo Savings",
+          "latest_transaction": "2026-10-05"
+        }
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-10-12"
+      }
+    },
+    "notes": [
+      "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm.",
+      "Annualizes year-to-date business profit; uneven income makes this rough.",
+      "Ignores Additional Medicare Tax, the QBI deduction, credits, other income, and withholding.",
+      "Safe-harbor rules based on last year's total tax (100%, or 110% at higher incomes) can lower what you must pay quarterly; ask your preparer."
+    ],
+    "projected_annual_net_profit": {
+      "display": "$37,207.94",
+      "minor": 3720794
+    },
+    "projected_total": {
+      "display": "$12,864.75",
+      "minor": 1286475
+    },
+    "self_employment_tax": {
+      "display": "$5,257.31",
+      "minor": 525731
+    },
+    "set_aside_pct_of_profit": "34.6",
+    "suggested_per_quarter": {
+      "display": "$3,216.18",
+      "minor": 321618
+    },
+    "tax_year": 2026,
+    "ytd_net_profit": {
+      "display": "$29,052.78",
+      "minor": 2905278
+    }
+  },
+  "estimated_tax_no_rate": {
+    "due_dates": [
+      {
+        "date": "2026-04-15",
+        "passed": true
+      },
+      {
+        "date": "2026-06-15",
+        "passed": true
+      },
+      {
+        "date": "2026-09-15",
+        "passed": true
+      },
+      {
+        "date": "2027-01-15",
+        "passed": false
+      }
+    ],
+    "income_tax_estimate": null,
+    "income_tax_rate_pct": null,
+    "meta": {
+      "currency": "USD",
+      "data_freshness": [
+        {
+          "account": "Demo Business Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Credit Card",
+          "latest_transaction": "2026-10-10"
+        },
+        {
+          "account": "Demo Savings",
+          "latest_transaction": "2026-10-05"
+        }
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-10-12"
+      }
+    },
+    "notes": [
+      "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm.",
+      "Income tax isn't included. Pass income_tax_rate_pct (your own planning rate) or set tax.income_tax_rate_pct in config.toml.",
+      "Annualizes year-to-date business profit; uneven income makes this rough.",
+      "Ignores Additional Medicare Tax, the QBI deduction, credits, other income, and withholding.",
+      "Safe-harbor rules based on last year's total tax (100%, or 110% at higher incomes) can lower what you must pay quarterly; ask your preparer."
+    ],
+    "projected_annual_net_profit": {
+      "display": "$37,207.94",
+      "minor": 3720794
+    },
+    "projected_total": {
+      "display": "$5,257.31",
+      "minor": 525731
+    },
+    "self_employment_tax": {
+      "display": "$5,257.31",
+      "minor": 525731
+    },
+    "set_aside_pct_of_profit": "14.1",
+    "suggested_per_quarter": {
+      "display": "$1,314.32",
+      "minor": 131432
+    },
+    "tax_year": 2026,
+    "ytd_net_profit": {
+      "display": "$29,052.78",
+      "minor": 2905278
+    }
+  },
+  "mileage_log": {
+    "meta": {
+      "currency": "USD",
+      "data_freshness": [
+        {
+          "account": "Demo Business Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Credit Card",
+          "latest_transaction": "2026-10-10"
+        },
+        {
+          "account": "Demo Savings",
+          "latest_transaction": "2026-10-05"
+        }
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "row_count": 5,
+      "total_count": 5
+    },
+    "notes": [
+      "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm."
+    ],
+    "rate_cents_per_mile": "72.5",
+    "standard_mileage_deduction": {
+      "display": "$129.92",
+      "minor": 12992
+    },
+    "tax_year": 2026,
+    "total_miles": "179.2",
+    "trips": [
+      {
+        "date": "2026-09-30",
+        "miles": "64.0",
+        "purpose": "Real estate shoot, Ocean Springs",
+        "vehicle": "Truck"
+      },
+      {
+        "date": "2026-09-11",
+        "miles": "18.2",
+        "purpose": "Gear pickup and client meeting, Gulfport",
+        "vehicle": "Truck"
+      },
+      {
+        "date": "2026-08-23",
+        "miles": "42.5",
+        "purpose": "Client shoot, Biloxi waterfront",
+        "vehicle": "Truck"
+      },
+      {
+        "date": "2026-05-20",
+        "miles": "12.0",
+        "purpose": "Bank and supplies run",
+        "vehicle": "Truck"
+      },
+      {
+        "date": "2026-03-04",
+        "miles": "42.5",
+        "purpose": "Client shoot, Biloxi",
+        "vehicle": "Truck"
+      }
+    ]
+  },
+  "review_writeoffs": {
+    "meta": {
+      "currency": "USD",
+      "data_freshness": [
+        {
+          "account": "Demo Business Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Credit Card",
+          "latest_transaction": "2026-10-10"
+        },
+        {
+          "account": "Demo Savings",
+          "latest_transaction": "2026-10-05"
+        }
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "row_count": 5
+    },
+    "notes": [
+      "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm."
+    ],
+    "open_questions": 5,
+    "sections": {
+      "business_meals": [
+        {
+          "count": 7,
+          "question": "Business meals are usually 50% deductible and need a record of who attended and the business purpose. Do you have those notes?",
+          "total": {
+            "display": "$367.47",
+            "minor": 36747
+          }
+        }
+      ],
+      "income_to_confirm": [
+        {
+          "categories": [
+            "Uncategorized"
+          ],
+          "count": 1,
+          "merchant": "Target",
+          "question": "Is this business income (client payments, sales) or personal (refunds, gifts, reimbursements)?",
+          "total": {
+            "display": "$42.50",
+            "minor": 4250
+          }
+        }
+      ],
+      "large_business_purchases": [
+        {
+          "amount": {
+            "display": "-$3,249.00",
+            "minor": -324900
+          },
+          "date": "2026-09-02",
+          "id": 215,
+          "merchant": "B&H Photo",
+          "question": "Over the $2,500 de minimis safe harbor. Is this equipment that should be depreciated or expensed under Section 179? Ask your preparer."
+        }
+      ],
+      "possibly_business_in_personal": [
+        {
+          "categories": [
+            "Uncategorized"
+          ],
+          "count": 4,
+          "last_date": "2026-10-04",
+          "merchant": "B&H Photo",
+          "question": "Was any of this for your business? If so, mark it business with set_scope.",
+          "spent": {
+            "display": "$1,384.00",
+            "minor": 138400
+          }
+        },
+        {
+          "categories": [
+            "Uncategorized"
+          ],
+          "count": 6,
+          "last_date": "2026-09-14",
+          "merchant": "Github Inc",
+          "question": "Was any of this for your business? If so, mark it business with set_scope.",
+          "spent": {
+            "display": "$24.00",
+            "minor": 2400
+          }
+        }
+      ]
+    },
+    "tax_year": 2026
+  },
+  "schedule_c_draft": {
+    "expenses_by_line": [
+      {
+        "amount": {
+          "display": "$129.92",
+          "minor": 12992
+        },
+        "categories": [],
+        "line": "9",
+        "name": "Car and truck expenses",
+        "standard_mileage": {
+          "deduction": {
+            "display": "$129.92",
+            "minor": 12992
+          },
+          "miles": "179.2",
+          "rate_cents": "72.5"
+        }
+      },
+      {
+        "amount": {
+          "display": "$3,249.00",
+          "minor": 324900
+        },
+        "categories": [
+          {
+            "category": "Business: Equipment",
+            "count": 1,
+            "spent": {
+              "display": "$3,249.00",
+              "minor": 324900
+            }
+          }
+        ],
+        "line": "13",
+        "name": "Depreciation and section 179 expense deduction"
+      },
+      {
+        "amount": {
+          "display": "$40.00",
+          "minor": 4000
+        },
+        "categories": [
+          {
+            "category": "Business: Supplies",
+            "count": 1,
+            "spent": {
+              "display": "$40.00",
+              "minor": 4000
+            }
+          }
+        ],
+        "line": "22",
+        "name": "Supplies"
+      },
+      {
+        "amount": {
+          "display": "$183.73",
+          "minor": 18373
+        },
+        "categories": [
+          {
+            "category": "Business: Meals",
+            "count": 7,
+            "spent": {
+              "display": "$367.47",
+              "minor": 36747
+            }
+          }
+        ],
+        "full_amount": {
+          "display": "$367.47",
+          "minor": 36747
+        },
+        "line": "24b",
+        "name": "Deductible meals"
+      },
+      {
+        "amount": {
+          "display": "$587.93",
+          "minor": 58793
+        },
+        "categories": [
+          {
+            "category": "Business: Software & Subscriptions",
+            "count": 14,
+            "spent": {
+              "display": "$587.93",
+              "minor": 58793
+            }
+          }
+        ],
+        "line": "27b",
+        "name": "Other expenses (from line 48)"
+      }
+    ],
+    "gross_receipts": {
+      "display": "$33,243.36",
+      "minor": 3324336
+    },
+    "meta": {
+      "currency": "USD",
+      "data_freshness": [
+        {
+          "account": "Demo Business Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Checking",
+          "latest_transaction": "2026-10-12"
+        },
+        {
+          "account": "Demo Credit Card",
+          "latest_transaction": "2026-10-10"
+        },
+        {
+          "account": "Demo Savings",
+          "latest_transaction": "2026-10-05"
+        }
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "row_count": 5
+    },
+    "mileage": {
+      "deduction": {
+        "display": "$129.92",
+        "minor": 12992
+      },
+      "deduction_minor": 12992,
+      "miles": "179.2",
+      "rate_cents_per_mile": "72.5",
+      "trips": 5
+    },
+    "notes": [
+      "This organizes your own records for you and your tax preparer. It is not tax advice, and whether something is deductible depends on facts only you and a professional can confirm.",
+      "Line 24b shows 50% of business meals, the usual limit. Some meals are fully deductible or not deductible at all; confirm with your preparer.",
+      "Home office (line 30), depreciation details, inventory/COGS (Part III), and health insurance are not computed here."
+    ],
+    "tax_year": 2026,
+    "tentative_net_profit": {
+      "display": "$29,052.78",
+      "minor": 2905278
+    },
+    "total_expenses": {
+      "display": "$4,190.58",
+      "minor": 419058
+    },
+    "unmapped_business_spending": []
+  }
+}

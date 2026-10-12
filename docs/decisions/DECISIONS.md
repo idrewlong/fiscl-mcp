@@ -42,3 +42,12 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - **Why:** Teller has no public signup (only a sign-in page; `/signup` returns 404, checked 2026-10-11), so most users couldn't follow a Teller-first setup. The user's requirement: "it needs to be a free or cheap option".
 - **Rejected:** Plaid as the default (free, but a developer account per user is too much friction for non-technical users); Teller as the default (not obtainable).
 - **Release gates:** live Teller and Plaid checks are deferred by the user's choice; connectors remain release-gated until verified.
+
+## 2026-10-11 — Phase 3–5 product decisions
+- **Multiple businesses (Phase 3 slice D):** Option A, per-transaction. Add a `businesses` table plus a nullable `business_id` on accounts, transactions, splits and 1099 forms. NULL means the default business (id 1), so there's no backfill and single-business output stays byte-identical. Rejected: account-level only (can't share a card or split a purchase across businesses).
+- **State tax:** planning depth only, signed off. Due dates, installment percentages, a user-supplied rate, no-income-tax states, and `estimated_required: false` for UT and ID. Weekend dates roll forward in code. A per-state `verified` flag with `VERIFIED_FOR = 2026`. No bracket engine. Source: `docs/research/2026-10-11-state-estimates-1099.md`.
+- **1099 thresholds:** NEC/MISC are $600 before 2026 and $2,000 for 2026 (`>=`), indexed from 2027. 1099-K applies above $20,000 AND above 200 transactions (`>`); card processors have no threshold. Thresholds are looked up by payment year.
+- **QuickBooks Online (Phase 4):** research first. Build only if personal use is free and needs no paid partner tier or review we can't do. Otherwise drop it.
+- **Holdings import profiles (Phase 4):** built-in profiles for Fidelity, Schwab and Vanguard position exports, plus crypto tax reports (start with the most common export formats; generic profile for the rest).
+- **HTTP transport (Phase 5):** read-only tools by default. Write tools over HTTP require `[http] allow_writes = true` in config. Why: HTTP is reachable by any local process holding the token, whereas stdio is bound to one client.
+- **tax.py → tax/ package** (Phase 3 slice 0), same pattern as analysis/, with a byte-identical snapshot test.
