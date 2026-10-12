@@ -104,7 +104,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None, busines
 
     mixed = conn.execute(
         """SELECT a.name, COUNT(DISTINCT t.id) AS n FROM txn_lines t JOIN accounts a ON a.id = t.account_id
-           WHERE a.scope = 'mixed' AND t.scope IS NULL AND t.transfer_group IS NULL
+           WHERE a.scope = 'mixed' AND t.scope IS NULL AND t.transfer_group IS NULL AND t.amount IS NOT NULL
              AND t.posted_date BETWEEN ? AND ? GROUP BY a.id""",
         span,
     ).fetchall()
@@ -124,7 +124,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None, busines
         loose = conn.execute(
             f"""SELECT t.id, t.posted_date, t.merchant, t.amount FROM {TXN_FROM}
                 WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' AND t.transfer_group IS NULL
-                  AND t.business_id IS NULL AND a.business_id IS NULL
+                  AND t.amount IS NOT NULL AND t.business_id IS NULL AND a.business_id IS NULL
                   AND COALESCE(c.kind, '') NOT IN ('transfer', 'ignore')
                 ORDER BY ABS(t.amount) DESC, t.id LIMIT ?""",
             (*span, limit),

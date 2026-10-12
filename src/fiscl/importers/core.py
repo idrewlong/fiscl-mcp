@@ -20,6 +20,7 @@ from ..installkey import (
     record_fingerprint,
     require_usable_key,
 )
+from ..money import exponent
 from ..normalize import load_aliases, normalize_merchant
 from .csv_import import CSVImportError, parse_csv
 from .ofx import OFXError, looks_like_ofx, parse_ofx
@@ -161,6 +162,26 @@ def _resolve_account(
     if row is None:
         raise ImportFailed("the account name given doesn't exist. Create it with `fiscl accounts add`.")
     return row
+
+
+def _align_currency(stmt: ParsedStatement, account: sqlite3.Row, cfg: Config) -> None:
+    """Rows carry the account's currency. A statement that states its own (OFX CURDEF, a CSV profile's `currency`)
+    must agree with the account; one that doesn't (QIF, a profile without `currency`) adopts the account's, but only
+    when that currency has the home currency's decimal places, because its amounts were parsed with those."""
+    acct_currency = (account["currency"] or cfg.currency).upper()
+    if stmt.currency.upper() == acct_currency:
+        return
+    if stmt.currency_stated:
+        raise ImportFailed(
+            "the statement's currency doesn't match the account's currency. Import it into an account that uses "
+            "the same currency."
+        )
+    if exponent(acct_currency) != exponent(stmt.currency):
+        raise ImportFailed(
+            "this file doesn't state a currency and the account's currency has a different number of decimal "
+            "places than your home currency, so the amounts can't be read safely. Use a CSV profile with `currency`."
+        )
+    stmt.currency = acct_currency
 
 
 def _carry_edits(conn: sqlite3.Connection, pend: sqlite3.Row, new_id: int, amount: int) -> tuple[int, int]:
@@ -376,6 +397,7 @@ def import_statements(
         for stmt in statements:
             account = _resolve_account(conn, cfg, stmt, account_name)
             account_id = account["id"]
+            _align_currency(stmt, account, cfg)
             result.accounts.append(account["name"])
             added, skipped, replaced, carried, dropped = _insert_statement(conn, cfg, stmt, account, import_id, aliases)
             result.rows_seen += len(stmt.txns)

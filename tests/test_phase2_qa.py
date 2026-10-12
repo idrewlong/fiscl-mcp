@@ -656,7 +656,12 @@ async def test_no_secret_in_db_wal_backups_logs_or_any_mcp_surface_after_both_sy
             r = await c.read_resource(str(res.uri))
             surfaces.append("".join(getattr(x, "text", "") for x in r.contents))
         for p in (await c.list_prompts()).prompts:
-            r = await c.get_prompt(p.name, {k.name: "x" for k in (p.arguments or [])})
+            # Prompts that validate their arguments (and refuse "x") get valid ones.
+            valid = {"week_ending": "2026-10-04", "year": "2025", "months": "6", "category": "Dining"}
+            args = {k.name: valid.get(k.name, "x") for k in (p.arguments or [])}
+            if p.name == "spending_deep_dive":
+                args.pop("merchant", None)
+            r = await c.get_prompt(p.name, args)
             surfaces.append(json.dumps(r.model_dump(mode="json"), default=str))
     conn.commit()
     secrets_ = [

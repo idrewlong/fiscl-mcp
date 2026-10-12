@@ -123,6 +123,10 @@ class Config:
         return self.home / "exports"
 
     @property
+    def digests(self) -> Path:
+        return self.home / "digests"
+
+    @property
     def profiles_dir(self) -> Path:
         return self.home / "profiles"
 
@@ -275,7 +279,18 @@ def ensure_layout(cfg: Config) -> None:
     if home == Path.home().resolve() or home == Path(home.anchor):
         # We chmod the data dir to 0700 and fill it with files; never do that to $HOME or a filesystem root.
         raise ConfigError(f"{cfg.home} can't be the fiscl data directory; use a dedicated folder like ~/fiscl")
-    for d in (cfg.home, cfg.inbox, cfg.processed, cfg.failed, cfg.logs, cfg.backups, cfg.profiles_dir, cfg.exports):
+    layout = (
+        cfg.home,
+        cfg.inbox,
+        cfg.processed,
+        cfg.failed,
+        cfg.logs,
+        cfg.backups,
+        cfg.profiles_dir,
+        cfg.exports,
+        cfg.digests,
+    )
+    for d in layout:
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, DIR_MODE)
     for path, text in (

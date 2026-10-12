@@ -225,6 +225,48 @@ def test_unconverted_rows_reach_no_aggregate_and_are_counted(conn, cfg):
     assert q["totals"]["net"]["minor"] == 300000 - 2500
 
 
+def test_unconverted_business_rows_reach_no_tax_output_and_do_not_crash(conn, cfg):
+    """Per-row readers of txn_lines (export detail, write-off review) must skip rows whose home amount is NULL."""
+    from fiscl import tax
+
+    tax.manage_business(conn, cfg, action="add", name="Consulting", dry_run=False)
+    add_account(conn, "Euro biz", "checking", currency="EUR", scope="business")
+    add_account(conn, "Euro consulting", "checking", currency="EUR", scope="business")
+    tax.set_scope(conn, cfg, [{"account": "Euro consulting", "scope": "business", "business": "Consulting"}], False)
+    home = add_account(conn, "Biz", "checking", scope="business")
+    add_txn(conn, home, "2026-03-01", 500000, "Client A", category="Income: Business")
+    add_txn(conn, home, "2026-03-02", -2500, "Adobe", category="Business: Software & Subscriptions")
+    sentinel = 77_777_777
+    rows = [("2026-04-03", -sentinel, "Euro Gear"), ("2026-04-04", sentinel, "Euro Client")]
+    import_eur(conn, cfg, rows, name="Euro biz", digest="b1")
+    import_eur(conn, cfg, rows, name="Euro consulting", digest="b2")
+    conn.execute(
+        "UPDATE transactions SET category_id = (SELECT id FROM categories WHERE name = 'Business: Supplies') "
+        "WHERE currency = 'EUR' AND amount < 0"
+    )
+    conn.commit()
+    kw = {"year": 2026, "today": TODAY}
+    calls = {
+        "schedule_c_draft": tax.schedule_c_draft(conn, cfg, **kw),
+        "schedule_c_draft_biz": tax.schedule_c_draft(conn, cfg, business="Consulting", **kw),
+        "review_writeoffs": tax.review_writeoffs(conn, cfg, **kw),
+        "review_writeoffs_biz": tax.review_writeoffs(conn, cfg, business="Consulting", **kw),
+        "export": tax.export_schedule_c(conn, cfg, include_transactions=True, **kw),
+        "list_businesses": tax.list_businesses(conn, cfg, **kw),
+        "reconcile_1099": tax.reconcile_1099(conn, cfg, tax_year=2026, today=TODAY),
+    }
+    for name, out in calls.items():
+        text = json.dumps(out, default=str)
+        assert "77777777" not in text and "777,777" not in text, name
+        if "meta" in out:
+            assert out["meta"]["unconverted"]["count"] == 4, name
+    assert calls["export"]["summary"]["gross_receipts"]["minor"] == 500000
+    # The detail CSV is written (not just planned) without touching the unconverted rows.
+    written = tax.export_schedule_c(conn, cfg, include_transactions=True, dry_run=False, **kw)
+    detail = [f for f in written["files"] if f["kind"] == "detail_csv"]
+    assert sorted(f["rows"] for f in detail) == [0, 2]  # the two USD rows; no EUR row appears
+
+
 def test_adding_the_missing_rate_brings_the_rows_in_and_clears_the_counter(conn, cfg):
     import_eur(conn, cfg, [("2026-09-03", -10000, "Euro Mart")])
     conn.execute("UPDATE transactions SET category_id = (SELECT id FROM categories WHERE name = 'Groceries')")
@@ -678,3 +720,89 @@ def test_a_5xx_or_network_failure_on_revoke_deletes_nothing(cfg, conn, keychain)
             registry.forget(conn, cfg, "qbo", opener=api)
         assert keychain.get_password("fiscl", base.secret_name("qbo", ref)) == REFRESH_1
         assert len(connections.list_rows(conn, "qbo")) == 1
+
+
+# --- imports into a foreign-currency account use the account's currency ----------------------------------------------
+
+
+def _ofx(curdef: str, acct: str = "5550001234") -> str:
+    return (
+        "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n\n<OFX><SIGNONMSGSRSV1><SONRS><FI><ORG>Test Bank</FI></SONRS>"
+        f"</SIGNONMSGSRSV1><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>{curdef}"
+        f"<BANKACCTFROM><BANKID>1<ACCTID>{acct}<ACCTTYPE>CHECKING</BANKACCTFROM><BANKTRANLIST>"
+        "<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260903<TRNAMT>-10.00<FITID>A1<NAME>Cafe</STMTTRN>"
+        "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>"
+    )
+
+
+def _profile(cfg, extra: str) -> None:
+    cfg.profiles_dir.mkdir(exist_ok=True)
+    (cfg.profiles_dir / "p.toml").write_text(
+        'name = "p"\nmatch_headers = ["Date", "Description", "Amount"]\ndate_column = "Date"\n'
+        'description_column = "Description"\namount_column = "Amount"\ndate_format = "%Y-%m-%d"\n' + extra,
+        encoding="utf-8",
+    )
+
+
+def test_qif_into_a_foreign_account_is_that_currency_and_converts(conn, cfg, tmp_path):
+    add_account(conn, "Euro", "checking", currency="EUR")
+    put_rate(conn, "2026-09-01", "EUR", "1.1")
+    text = "!Type:Bank\nD9/3'26\nT-10.00\nPCafe\n^\n"
+    r = import_file(conn, cfg, write(tmp_path / "e.qif", text), account_name="Euro")
+    assert r.status == "ok" and r.rows_added == 1
+    row = conn.execute("SELECT currency, amount, amount_home FROM transactions").fetchone()
+    assert (row["currency"], row["amount"], row["amount_home"]) == ("EUR", -1000, -1100)
+
+
+def test_qif_into_a_foreign_account_without_a_rate_is_unconverted_not_home(conn, cfg, tmp_path):
+    add_account(conn, "Euro", "checking", currency="EUR")
+    text = "!Type:Bank\nD9/3'26\nT-10.00\nPCafe\n^\n"
+    import_file(conn, cfg, write(tmp_path / "e.qif", text), account_name="Euro")
+    row = conn.execute("SELECT currency, amount_home FROM transactions").fetchone()
+    assert row["currency"] == "EUR" and row["amount_home"] is None
+
+
+def test_qif_into_an_account_with_other_decimals_is_refused(conn, cfg, tmp_path):
+    add_account(conn, "Yen", "checking", currency="JPY")
+    text = "!Type:Bank\nD9/3'26\nT-1000\nPCafe\n^\n"
+    r = import_file(conn, cfg, write(tmp_path / "y.qif", text), account_name="Yen")
+    assert r.status == "failed" and "decimal places" in r.error
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
+
+
+def test_csv_without_profile_currency_takes_the_accounts_currency(conn, cfg, tmp_path):
+    add_account(conn, "Euro", "checking", currency="EUR")
+    put_rate(conn, "2026-09-01", "EUR", "2")
+    _profile(cfg, "")
+    csv_text = "Date,Description,Amount\n2026-09-03,Cafe,-10.00\n"
+    r = import_file(conn, cfg, write(tmp_path / "e.csv", csv_text), account_name="Euro")
+    assert r.status == "ok", r.error
+    row = conn.execute("SELECT currency, amount_home FROM transactions").fetchone()
+    assert (row["currency"], row["amount_home"]) == ("EUR", -2000)
+
+
+def test_ofx_curdef_must_match_the_account_currency(conn, cfg, tmp_path):
+    add_account(conn, "Euro", "checking", currency="EUR")
+    r = import_file(conn, cfg, write(tmp_path / "u.ofx", _ofx("USD")), account_name="Euro")
+    assert r.status == "failed" and "currency" in r.error
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
+    ok = import_file(conn, cfg, write(tmp_path / "e.ofx", _ofx("EUR")), account_name="Euro")
+    assert ok.status == "ok" and conn.execute("SELECT currency FROM transactions").fetchone()[0] == "EUR"
+
+
+def test_a_csv_profile_currency_that_differs_from_the_account_is_refused(conn, cfg, tmp_path):
+    add_account(conn, "Checking", "checking")
+    _profile(cfg, 'currency = "EUR"\n')
+    csv_text = "Date,Description,Amount\n2026-09-03,Cafe,-10.00\n"
+    r = import_file(conn, cfg, write(tmp_path / "e.csv", csv_text), account_name="Checking")
+    assert r.status == "failed" and "currency" in r.error
+
+
+@pytest.mark.parametrize("code", ["XAU", "XTS", "QQ", "usd1"])
+def test_ofx_curdef_that_is_not_a_supported_currency_code_fails_at_parse(code):
+    from fiscl.importers.ofx import OFXError, parse_ofx
+    from fiscl.money import CURRENCY_CODE_MSG
+
+    with pytest.raises(OFXError) as exc:
+        parse_ofx(_ofx(code))
+    assert CURRENCY_CODE_MSG in str(exc.value) and code not in str(exc.value)

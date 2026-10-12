@@ -17,12 +17,14 @@ Local-first personal + business finance MCP server. It imports bank exports (CSV
 | Format | `uv run ruff format .` |
 | Unit tests | `uv run pytest -q` (~6s; `-m 'not smoke'` skips the stdio smoke test) |
 | HTTP server (loopback, bearer token, read-only by default) | `uv run fiscl serve --http` · token: `uv run fiscl http token show|rotate|forget` |
+| Weekly digest | `uv run fiscl digest [--write]` |
 | Smoke (every tool over stdio) | `uv run python scripts/smoke.py` |
 | Build | `uv build` |
 
 ## Layout
 ```
 src/fiscl/
+  notify.py        debounced resource-updated notifications (URIs only) after applied edits, syncs, imports
   http_transport.py  optional loopback HTTP transport: ASGI gate (bearer token, Origin/Host/method checks, rate limit) in front of the SDK app
   server.py        MCP wiring: one thin wrapper per tool → run() guard (open DB, call service, redact, audit)
   analysis/        read services + categorization edits, one module per area:
@@ -63,7 +65,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 - **SQL:** parameterized only. Use `FROM {TXN_FROM}` (the split-aware `txn_lines` view) for aggregates and `TXN_BASE_FROM` for row listings, balances, and edits so the `t`/`a`/`c` aliases that `SCOPE_SQL`, `SPENDING_FILTER`, and `INCOME_FILTER` need are present. Use `common.txn_filter(account_id, scope)` for optional account/scope restrictions.
 - **Bad input:** raise `GuardError("message safe to show the model", code="not_found|sum_mismatch|needs_terms|exists|invalid|sync_failed|key_missing")`; `run()` returns the redacted message to the model and logs only the code. Never put merchant names, amounts, or asset/goal/account names in error text; put names in structured response fields with fixed prose. Validate enums with `guard.choice`, dates with `guard.date_range`/`parse_month`, row caps with `guard.clamp_limit`.
 - **Local writes:** `dry_run=True` by default, return `common.plan_result(...)`, cap bulk edits with `check_items`/`check_bulk`, and annotate the tool `LOCAL_DESTRUCTIVE` if it can remove or overwrite user data, `LOCAL_WRITE` only if purely additive. `dry_run` is a safety default, not a gate; the human gate is the MCP client's tool approval. TOML edits go through `config.append_toml_block` (keeps `.bak` + provenance).
-- **Files fiscl writes for the user** (exports, digests) go only under fixed folders in the data dir, opened with `O_CREAT|O_EXCL|O_NOFOLLOW` at 0600; never accept a caller-supplied path. Escape CSV formula prefixes and Markdown in bank-derived text.
+- **Files fiscl writes for the user** (exports, digests) go only under fixed folders in the data dir via `tax.export.private_dir` + `write_all`, opened with `O_CREAT|O_EXCL|O_NOFOLLOW` at 0600; never accept a caller-supplied path. Escape CSV formula prefixes and Markdown in bank-derived text.
 - **Tax reference data** (state schedules, 1099 thresholds) are static tables checked against official sources for tax year `VERIFIED_FOR`; rows with `verified=False` must surface a note. Dates roll to the next business day in code. Thresholds are looked up by payment year. No state bracket engine.
 - **Businesses:** effective business = split → transaction → account → default (id 1), exposed as `t.business_id` in `txn_lines`; NULL means the default, so single-business output is unchanged. SE tax is computed once on combined business profit (per person). Mileage counts on the default business.
 - **Prompts and resources** interpolate only validated values (e.g. a 4-digit year), never bank text.

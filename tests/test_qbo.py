@@ -609,6 +609,39 @@ def test_a_full_read_replaces_the_mirror_so_deleted_invoices_disappear(cfg, conn
     assert conn.execute("SELECT COUNT(*) FROM qbo_invoices WHERE qbo_id = '105'").fetchone()[0] == 0
 
 
+def _many_invoices(n: int, stamp: str = "2026-10-10T08:00:00-05:00") -> list[dict]:
+    return [
+        {**INVOICES[0], "Id": str(10_000 + k), "DocNumber": str(k), "MetaData": {"LastUpdatedTime": stamp}}
+        for k in range(n)
+    ]
+
+
+def test_a_capped_incremental_read_does_not_advance_the_cursor(cfg, conn, synced):
+    api, _ = synced
+    before = conn.execute("SELECT cursor FROM connections").fetchone()[0]
+    api.invoices = _many_invoices(qbo.MAX_PAGES * qbo.PAGE_SIZE)
+    api.calls.clear()
+    out = sync(conn, cfg, api)
+    assert len(api.queries()) == qbo.MAX_PAGES  # the cap stopped the read at 50 full pages
+    assert conn.execute("SELECT cursor FROM connections").fetchone()[0] == before
+    assert any("cursor was not advanced" in w for w in out["results"]["qbo"]["warnings"]), out
+
+
+def test_a_capped_first_read_keeps_the_existing_mirror_and_sets_no_cursor(cfg, conn, synced):
+    api, _ = synced
+    conn.execute("UPDATE connections SET cursor = NULL")
+    api.invoices = _many_invoices(qbo.MAX_PAGES * qbo.PAGE_SIZE)
+    sync(conn, cfg, api)
+    assert conn.execute("SELECT cursor FROM connections").fetchone()[0] is None
+    # The fixture invoices (not in this partial read) were not wiped by the replace-the-mirror step.
+    assert conn.execute("SELECT COUNT(*) FROM qbo_invoices WHERE qbo_id = '105'").fetchone()[0] == 1
+
+
+def test_receivables_and_books_notes_say_deleted_invoices_linger(cfg, conn, synced):
+    r = analysis.receivables(conn, cfg, today=TODAY)
+    assert any("deleted in QuickBooks" in n for n in r["notes"])
+
+
 def test_receivables_aging_buckets_match_the_hand_computed_fixture(cfg, conn, synced):
     r = analysis.receivables(conn, cfg, today=TODAY)
     assert [(i["doc_number"], i["days_overdue"], i["aging_bucket"]) for i in r["invoices"]] == [

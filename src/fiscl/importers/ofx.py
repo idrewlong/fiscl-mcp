@@ -10,7 +10,7 @@ import re
 from datetime import date
 
 from ..guard import clean_text
-from ..money import parse_amount
+from ..money import CURRENCY_CODE_MSG, is_currency_code, parse_amount
 from .types import ParsedStatement, ParsedTxn
 
 
@@ -70,6 +70,8 @@ def parse_ofx(text: str) -> list[ParsedStatement]:
             else:
                 type_hint = "checking"
             currency = (_value(stmt, "CURDEF") or "USD").upper()
+            if not is_currency_code(currency):
+                raise OFXError(f"CURDEF {CURRENCY_CODE_MSG}")  # never echo the file's value
 
             txns: list[ParsedTxn] = []
             for n, trn in enumerate(_blocks(stmt, "STMTTRN"), start=1):

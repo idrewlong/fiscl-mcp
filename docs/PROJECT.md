@@ -454,7 +454,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [x] `find_anomalies`
 - [x] Subscription watchdog: trials converting to paid, duplicate services
 - [x] Refund tracker
-- [ ] Weekly digest (Markdown file or Claude scheduled task)
+- [x] Weekly digest (tool, Markdown file, `fiscl digest` for cron)
 
 **Tax**
 - [x] Schedule C export (CSV + Markdown; PDF later)
@@ -471,7 +471,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 
 **MCP**
 - [x] Streamable HTTP on localhost with a keychain bearer token (read-only tools by default)
-- [ ] Resource change notifications after imports
+- [x] Resource change notifications after imports, syncs and applied edits
 
 ### Later / maybe
 

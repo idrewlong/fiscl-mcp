@@ -31,6 +31,9 @@ socket.getaddrinfo = _blocked  # type: ignore[assignment]
 
 OK, ERROR, DRY = "ok", "error", "dry_run"
 START = (date.today() - timedelta(days=400)).isoformat()  # tools cap the range at 10 years; demo is 6 months
+_SUNDAY = date.today() - timedelta(days=7 + (date.today().weekday() + 1) % 7)  # a past Sunday: a digest week end
+PAST_WEEK = _SUNDAY.isoformat()
+PAST_WEEK_STEM = f"digests/digest-{_SUNDAY.isocalendar().year}-W{_SUNDAY.isocalendar().week:02d}"
 
 
 def dollars(minor: int) -> str:
@@ -159,6 +162,8 @@ async def run(home: Path) -> Smoke:
             ("schedule_c_draft", {"business": "My business"}),
             ("review_writeoffs", {}),
             ("mileage_log", {}),
+            ("weekly_digest", {}),
+            ("weekly_digest", {"week_ending": PAST_WEEK, "scope": "all"}),
         ]
         for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget", "net_worth"):
             reads.append(("show_chart", {"kind": kind}))
@@ -179,6 +184,7 @@ async def run(home: Path) -> Smoke:
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business"}]}),
             ("log_trip", {"trip_date": "2026-01-02", "miles": 10, "purpose": "Smoke test client visit"}),
             ("export_schedule_c", {"include_transactions": True}),
+            ("write_digest", {}),
             ("manage_business", {"action": "add", "name": "Smoke Consulting"}),
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business", "business": "My business"}]}),
             (
@@ -233,6 +239,9 @@ async def run(home: Path) -> Smoke:
             ("receivables", {"as_of": "soon"}),
             ("books_vs_bank", {"year": 1800}),
             ("sync_accounts", {"provider": "bogus"}),
+            ("weekly_digest", {"week_ending": "not-a-date"}),
+            ("weekly_digest", {"scope": "everyone"}),
+            ("write_digest", {"week_ending": "2999-01-01", "dry_run": False}),
         ]
         for tool, args in bad:
             await s.call(c, tool, args, ERROR)
@@ -244,6 +253,14 @@ async def run(home: Path) -> Smoke:
         for f in exported["files"]:
             ok = f["path"].startswith("exports/") and (home / f["path"]).is_file()
             s.check(f"exported {f['path']} is relative and exists", ok, f)
+
+        s.check("dry-run digests wrote no files", not list((home / "digests").iterdir()))
+        digest = await s.call(c, "write_digest", {"week_ending": PAST_WEEK, "dry_run": False})
+        s.check(
+            "an applied digest lands under digests/ as a relative path",
+            digest["path"].startswith(PAST_WEEK_STEM) and (home / digest["path"]).is_file(),
+            digest,
+        )
 
         # Spot-check that the seeded demo cases surface.
         anomalies = await s.call(c, "find_anomalies", {"start_date": START, "sensitivity": "high"})
@@ -279,12 +296,31 @@ async def run(home: Path) -> Smoke:
             except Exception:  # noqa: BLE001 - any protocol error is the expected outcome
                 s.check(f"fiscl://tax/{bad_year} is rejected", True)
 
-        prompt_args = {"monthly_review": {}, "cash_forecast": {"days": "45"}, "tax_checkup": {"year": "2026"}}
+        prompt_args = {
+            "monthly_review": {},
+            "cash_forecast": {"days": "45"},
+            "tax_checkup": {"year": "2026"},
+            "weekly_digest": {"week_ending": PAST_WEEK},
+            "spending_deep_dive": {"category": "Groceries", "months": "3"},
+            "year_in_review": {"year": "2025"},
+        }
         prompts = (await c.list_prompts()).prompts
         for p in prompts:
             r = await c.get_prompt(p.name, prompt_args.get(p.name, {}))
             s.check(f"prompt {p.name}", bool(r.messages), r)
         s.check("goal_check_in prompt listed", "goal_check_in" in {p.name for p in prompts})
+        names = {p.name for p in prompts}
+        s.check("phase 5 prompts listed", {"weekly_digest", "spending_deep_dive", "year_in_review"} <= names, names)
+        for bad_prompt in (
+            ("year_in_review", {"year": "20x6"}),
+            ("spending_deep_dive", {"months": "99"}),
+            ("spending_deep_dive", {"category": "A", "merchant": "B"}),
+        ):
+            try:
+                await c.get_prompt(*bad_prompt)
+                s.check(f"prompt {bad_prompt[0]} refuses bad arguments", False, bad_prompt)
+            except Exception:  # noqa: BLE001 - any protocol error is the expected outcome
+                s.check(f"prompt {bad_prompt[0]} refuses bad arguments", True)
 
         # Anything a new tool adds must be added to this script too.
         missing = tools - s.called

@@ -568,8 +568,11 @@ class QboConnector:
         since = company.cursor if company.cursor and _STAMP_RX.fullmatch(company.cursor) else None
         invoices, capped = client.query("Invoice", since)
         if capped:
+            # Pages are ordered by Id, not by update time, so the newest stamp seen says nothing about the unread
+            # invoices: moving the cursor (or replacing the mirror on a first read) could skip or drop them.
             self.warnings.append(
-                f"QuickBooks has more invoices than one run reads ({MAX_PAGES * PAGE_SIZE}); sync again"
+                f"QuickBooks has more invoices than one run reads ({MAX_PAGES * PAGE_SIZE}); the sync cursor was not "
+                "advanced and the saved copy was not replaced, so some invoices may be missing"
             )
         reports = self._reports(client, today)
         row = conn.execute(
@@ -581,7 +584,7 @@ class QboConnector:
             self.warnings.append("Some QuickBooks invoices couldn't be read and were skipped")
         conn.execute("SAVEPOINT fiscl_qbo")
         try:
-            if since is None:  # a full read replaces the mirror, so invoices deleted in QuickBooks disappear
+            if since is None and not capped:  # a complete full read replaces the mirror (deleted invoices vanish)
                 conn.execute("DELETE FROM qbo_invoices WHERE connection_id = ?", (cid,))
             conn.executemany(
                 """INSERT OR REPLACE INTO qbo_invoices
@@ -610,7 +613,7 @@ class QboConnector:
             )
             stamps = [r[8] for r in mapped if _STAMP_RX.fullmatch(r[8])]
             newest = newest_stamp(([since] if since else []) + stamps)
-            if newest:
+            if newest and not capped:
                 conn.execute("UPDATE connections SET cursor = ? WHERE id = ?", (newest, cid))
             conn.execute("RELEASE fiscl_qbo")
         except Exception:

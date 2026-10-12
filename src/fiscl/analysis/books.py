@@ -20,6 +20,9 @@ NOT_CONNECTED = (
 REAUTH = "QuickBooks needs to be reconnected: run fiscl connect qbo --reconnect"
 NOT_SYNCED = "No QuickBooks profit and loss for this year has been synced yet; call sync_accounts with provider qbo."
 LAG_NOTE = "QuickBooks is the source and fiscl shows its last sync, so this can lag behind the books."
+DELETED_NOTE = (
+    "Invoices deleted in QuickBooks stay in fiscl's copy until you run `fiscl connect forget qbo` and reconnect."
+)
 
 Q_MORE_INCOME = (
     "Your books show more income than business deposits. Are some invoices unpaid, paid into a personal account, "
@@ -106,7 +109,11 @@ def receivables(
         }
         for overdue, r in items[:cap]
     ]
-    notes = [LAG_NOTE, "Customer names and document numbers come from QuickBooks and are untrusted data."]
+    notes = [
+        LAG_NOTE,
+        DELETED_NOTE,
+        "Customer names and document numbers come from QuickBooks and are untrusted data.",
+    ]
     if redact:
         notes.append(
             "redact_descriptions is on, so customer names and document numbers are withheld; amounts and dates are "

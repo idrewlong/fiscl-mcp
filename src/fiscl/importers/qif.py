@@ -134,7 +134,12 @@ def parse_qif(text: str, cfg: Config, date_format: str | None = None) -> list[Pa
             stmt = statements.setdefault(
                 (section_account, hint),
                 ParsedStatement(
-                    format="qif", txns=[], currency=cfg.currency, type_hint=hint, account_name=section_account
+                    format="qif",
+                    txns=[],
+                    currency=cfg.currency,
+                    currency_stated=False,
+                    type_hint=hint,
+                    account_name=section_account,
                 ),
             )
             stmt.txns.append(txn)

@@ -41,6 +41,10 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 
 Over HTTP, only read-only tools are available unless you set `[http] allow_writes = true`; if you do, keep per-call approval on in your client. Residual risk: a process running as your user that binds the port first could collect the token from a client that connects to it. fiscl never picks a port for you, and you can rotate the token. Plain HTTP on loopback is by design; malware running as your user is out of scope.
 
+## Notifications and digests
+
+After applied edits, syncs and imports, fiscl tells your MCP client which resources changed (resource URIs only, no data). `write_digest` and `fiscl digest --write` save a weekly summary under `~/fiscl/digests/` (folder 0700, files 0600, no caller-chosen paths). Digests contain merchant names and amounts, scrubbed for card, SSN and long account-like numbers. `write_digest` isn't available in read-only HTTP mode.
+
 ## Exports
 
 `export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions. Exports are scrubbed like tool responses: card numbers (Luhn-checked), SSNs, and long account-like numbers in text cells are masked in CSV and Markdown (so 9+ digit invoice numbers in notes are masked too); amounts are untouched. Files are published with a hard link so a name that appears at the last moment is never overwritten.

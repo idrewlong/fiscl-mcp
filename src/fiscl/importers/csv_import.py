@@ -325,6 +325,7 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
         format="csv",
         txns=txns,
         currency=currency,
+        currency_stated=profile.currency is not None,
         balances=sorted(latest.items()),
         profile=profile.name,
         account_name=profile.account,

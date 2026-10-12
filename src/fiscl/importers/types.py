@@ -26,6 +26,9 @@ class ParsedStatement:
     type_hint: str | None = None
     institution: str | None = None
     currency: str = "USD"
+    # False for formats that carry no currency of their own (QIF, a CSV profile without `currency`): `currency` is then
+    # the home currency the amounts were parsed with, and the import adopts the target account's currency instead.
+    currency_stated: bool = True
     balances: list[tuple[str, int]] = field(default_factory=list)
     profile: str | None = None
     account_name: str | None = None  # from a CSV profile's `account` field, or a QIF `!Account` block

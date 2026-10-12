@@ -8,6 +8,7 @@ from ..common import MAX_BULK_ROWS, data_freshness, meta, resolve_target
 from .amazon import amazon_matches
 from .books import books_vs_bank, receivables
 from .budgets import budget_status, set_budget, suggest_budgets
+from .digest import weekly_digest, write_digest
 from .edits import add_note, apply_categories, dismiss_recurring, split_transaction, tag_transactions
 from .forecast import LIQUID_TYPES, forecast_cash
 from .fx_tools import list_fx_rates, set_fx_rate
@@ -57,4 +58,6 @@ __all__ = [
     "subscription_watchdog",
     "suggest_budgets",
     "tag_transactions",
+    "weekly_digest",
+    "write_digest",
 ]

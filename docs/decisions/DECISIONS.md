@@ -94,3 +94,9 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - The token lives only in the OS keychain (`fiscl:http:token`) and is read per request, so rotation is immediate. A keychain failure fails closed with 503. It is never accepted from a query string or cookie.
 - Read-only by default: every tool not annotated `readOnlyHint=true` (including `sync_accounts`) is removed from the HTTP server unless `[http] allow_writes = true`. New tools must opt in as read-only.
 - `http_transport.py` is the second named exception (with `sync/connect.py`) in the AST network-import guard.
+
+## 2026-10-12 — Phase 4 review fixes and Phase 5 notifications/digest
+- Statements without a stated currency (QIF; CSV profiles without `currency`) adopt the account's currency. A stated currency that differs from the account's is refused. OFX `CURDEF` is validated against ISO 4217 at parse time.
+- A capped QBO read (50 pages) never advances the cursor or replaces the mirror. Invoices deleted in QuickBooks stay in the mirror until forget + reconnect (known limitation, noted in `receivables`).
+- Resource-updated notifications are debounced (~2 s) and sent only after applied edits, syncs that added rows, and imports. URIs only. They're delivered via `subscriptions/listen`; legacy `resources/subscribe` isn't served. The watcher thread reaches the event loop through an anyio token captured at startup.
+- The digest reuses the export safe-writer (`tax.export.private_dir` + `write_all`). Its tax reminder covers federal 1040-ES dates within 21 days when business data exists; state dates aren't included yet.

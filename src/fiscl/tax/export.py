@@ -165,6 +165,7 @@ def detail_rows(conn, cfg: Config, start: date, end: date, business_id: int | No
                    b.name AS business
             FROM {TXN_FROM} LEFT JOIN businesses b ON b.id = {BUSINESS_SQL}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {biz_sql}
+              AND t.amount IS NOT NULL  -- unconverted foreign rows have no home amount yet
             ORDER BY t.posted_date, t.id, t.split_id""",
         (start.isoformat(), end.isoformat(), *biz_params),
     ).fetchall()
@@ -268,7 +269,12 @@ def existing_exports(cfg: Config, year: int, limit: int = 10) -> list[str]:
 
 def exports_dir(cfg: Config, create: bool) -> Path:
     """The exports folder, verified to be a real private directory directly inside the data folder."""
-    d = cfg.exports
+    return private_dir(cfg, cfg.exports, create)
+
+
+def private_dir(cfg: Config, d: Path, create: bool, message: str = NOT_PRIVATE) -> Path:
+    """`d` (a fixed folder directly inside the data folder), verified to be a real private directory. Shared with the
+    weekly digest writer, which reuses `write_all` below."""
     try:
         st = os.lstat(d)
     except FileNotFoundError:
@@ -279,7 +285,7 @@ def exports_dir(cfg: Config, create: bool) -> Path:
     uid_ok = not hasattr(os, "getuid") or st.st_uid == os.getuid()
     real_dir = stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode)
     if not (real_dir and uid_ok and d.resolve().parent == cfg.home.resolve()):
-        raise GuardError(NOT_PRIVATE, code="invalid")
+        raise GuardError(message, code="invalid")
     if create and stat.S_IMODE(st.st_mode) != DIR_MODE:
         os.chmod(d, DIR_MODE)
     return d
@@ -290,12 +296,16 @@ _NO_HARDLINK_ERRNOS = {
 }
 
 
-def write_all(directory: Path, files: list[tuple[str, bytes]]) -> None:
+def write_all(
+    directory: Path,
+    files: list[tuple[str, bytes]],
+    exists_message: str = "an export with that name already exists; try again in a second",
+) -> None:
     """Write every file or none: temp files opened O_EXCL|O_NOFOLLOW (0600), then published with a hard link, which
     fails instead of replacing a file that appeared meanwhile."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     made: list[Path] = []
-    exists = GuardError("an export with that name already exists; try again in a second", code="exists")
+    exists = GuardError(exists_message, code="exists")
     try:
         for name, _ in files:
             if os.path.lexists(directory / name):

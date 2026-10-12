@@ -6,6 +6,7 @@ import logging
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -45,9 +46,9 @@ def _move(path: Path, dest_dir: Path) -> Path:
     return target
 
 
-def process_inbox_file(cfg: Config, path: Path) -> str:
+def process_inbox_file(cfg: Config, path: Path, on_imported: Callable[[], None] | None = None) -> str:
     """Import one inbox file. The watcher never guesses an account: CSVs need a profile with
-    `account` set, otherwise they go to failed/ with a note."""
+    `account` set, otherwise they go to failed/ with a note. `on_imported` runs after a file that added rows."""
     if path.suffix.lower() not in SUPPORTED or path.parent != cfg.inbox or path.name.startswith("."):
         return "ignored"
     if path.is_symlink() or not path.is_file():  # a symlink could point anywhere; a FIFO would block the read
@@ -66,6 +67,11 @@ def process_inbox_file(cfg: Config, path: Path) -> str:
     if result is not None and result.status in ("ok", "duplicate_file"):
         _move(path, cfg.processed)
         log.info("imported %s: %s added, %s skipped", path.name, result.rows_added, result.rows_skipped)
+        if on_imported is not None and result.status == "ok":
+            try:
+                on_imported()
+            except Exception:  # a notification problem must never stop the watcher
+                log.exception("on_imported callback failed")
         return result.status
     moved = _move(path, cfg.failed)
     moved.with_suffix(moved.suffix + ".error.txt").write_text(f"{error}\n", encoding="utf-8")
@@ -74,13 +80,14 @@ def process_inbox_file(cfg: Config, path: Path) -> str:
 
 
 class _Handler(FileSystemEventHandler):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, on_imported: Callable[[], None] | None = None):
         self.cfg = cfg
+        self.on_imported = on_imported
         self.lock = threading.Lock()
 
     def _handle(self, src: str) -> None:
         with self.lock:
-            process_inbox_file(self.cfg, Path(src))
+            process_inbox_file(self.cfg, Path(src), self.on_imported)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
@@ -91,13 +98,13 @@ class _Handler(FileSystemEventHandler):
             self._handle(str(event.dest_path))
 
 
-def start_watcher(cfg: Config):
+def start_watcher(cfg: Config, on_imported: Callable[[], None] | None = None):
     """Process anything already waiting in the inbox, then watch for new files."""
     for path in sorted(cfg.inbox.iterdir()):
         if path.is_file() and not path.is_symlink():
-            process_inbox_file(cfg, path)
+            process_inbox_file(cfg, path, on_imported)
     observer = Observer()
-    observer.schedule(_Handler(cfg), str(cfg.inbox), recursive=False)
+    observer.schedule(_Handler(cfg, on_imported), str(cfg.inbox), recursive=False)
     observer.daemon = True
     observer.start()
     return observer

@@ -115,7 +115,7 @@ def _serve_http(cfg, args) -> int:
     if not args.no_watch:
         from .watch import start_watcher
 
-        observer = start_watcher(cfg)
+        observer = start_watcher(cfg, on_imported=lambda: mcp.notifier.changed("import"))
     shown = f"[{host}]" if ":" in host else host
     print(f"fiscl listening on http://{shown}:{port}{ht.MCP_PATH}", file=sys.stderr)
     print("auth: Authorization: Bearer <token>; print it with `fiscl http token show`", file=sys.stderr)
@@ -130,6 +130,18 @@ def _serve_http(cfg, args) -> int:
     finally:
         if observer is not None:
             observer.stop()
+    return 0
+
+
+def cmd_digest(cfg, args) -> int:
+    """For cron/launchd: print the weekly digest, or with --write save it and print its path under the data folder."""
+    from .analysis import weekly_digest, write_digest
+
+    with open_db(cfg) as conn:
+        if args.write:
+            print(write_digest(conn, cfg, week_ending=args.week_ending, scope=args.scope, dry_run=False)["path"])
+        else:
+            print(weekly_digest(conn, cfg, week_ending=args.week_ending, scope=args.scope)["markdown"], end="")
     return 0
 
 
@@ -171,13 +183,14 @@ def cmd_serve(cfg, args) -> int:
         return _serve_http(cfg, args)
     from .server import build_server
 
+    mcp = build_server(cfg)
     observer = None
     if not args.no_watch:
         from .watch import start_watcher
 
-        observer = start_watcher(cfg)
+        observer = start_watcher(cfg, on_imported=lambda: mcp.notifier.changed("import"))
     try:
-        build_server(cfg).run("stdio")
+        mcp.run("stdio")
     finally:
         if observer is not None:
             observer.stop()
@@ -514,6 +527,10 @@ def cmd_doctor(cfg, args) -> int:
         problems.append("the exports folder is a symlink; remove it so fiscl can recreate a private folder")
     else:
         data_dirs.append(cfg.exports)  # schedule-c-*.csv/.md files: same sensitive data as the database
+    if cfg.digests.is_symlink():
+        problems.append("the digests folder is a symlink; remove it so fiscl can recreate a private folder")
+    else:
+        data_dirs.append(cfg.digests)  # digest-*.md files: merchant names and amounts
     for path in [cfg.home, *data_dirs]:
         if path.is_dir() and not path.is_symlink() and stat.S_IMODE(path.stat().st_mode) != DIR_MODE:
             os.chmod(path, DIR_MODE)
@@ -782,6 +799,12 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh", help="recompute every home-currency amount, e.g. after changing the currency in config.toml"
     )
     s.set_defaults(fn=cmd_fx)
+
+    s = sub.add_parser("digest", help="print the weekly digest, or --write it to <data dir>/digests/")
+    s.add_argument("--week-ending", metavar="YYYY-MM-DD", help="default: the most recent Sunday")
+    s.add_argument("--scope", choices=["personal", "business", "all"], default="personal")
+    s.add_argument("--write", action="store_true", help="save the file (never overwrites) and print its path")
+    s.set_defaults(fn=cmd_digest)
 
     sub.add_parser("backup", help="snapshot the database").set_defaults(fn=cmd_backup)
     sub.add_parser("doctor", help="check config, permissions, and data").set_defaults(fn=cmd_doctor)
