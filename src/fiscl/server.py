@@ -18,6 +18,7 @@ from mcp_types import ToolAnnotations
 from pydantic import Field
 
 from . import __version__, analysis, tax
+from .analysis.digest import SUNDAY_MESSAGE
 from .categorize import load_rules
 from .charts import CHART_HTML, CHART_URI, build_chart
 from .config import Config, ConfigError, load_budgets
@@ -77,6 +78,7 @@ def _valid_year(raw: object) -> int | None:
 
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _MONTHS = re.compile(r"[0-9]{1,2}")
+_DAYS = re.compile(r"[0-9]{1,3}")
 
 
 def _prompt_months(raw: str | None) -> int:
@@ -85,6 +87,15 @@ def _prompt_months(raw: str | None) -> int:
         return 6
     if not isinstance(raw, str) or not _MONTHS.fullmatch(raw) or not 1 <= int(raw) <= 24:
         raise GuardError("months must be a whole number from 1 to 24")
+    return int(raw)
+
+
+def _prompt_days(raw: str | None) -> int:
+    """7-120 (the forecast tool's range), ASCII digits only; the only form of `days` ever put in a prompt."""
+    if raw is None or raw == "":
+        return 30
+    if not isinstance(raw, str) or not _DAYS.fullmatch(raw) or not 7 <= int(raw) <= 120:
+        raise GuardError("days must be a whole number from 7 to 120")
     return int(raw)
 
 
@@ -1183,8 +1194,9 @@ def build_server(cfg: Config, *, read_only: bool = False) -> MCPServer:
 
     @mcp.prompt(description="Forecast the next month: low points, upcoming bills, safe-to-spend")
     def cash_forecast(days: str = "30") -> str:
+        n = _prompt_days(days)
         return (
-            f"Use fiscl forecast_cash with days={days} and then show_chart kind=forecast. Tell me the lowest "
+            f"Use fiscl forecast_cash with days={n} and then show_chart kind=forecast. Tell me the lowest "
             "projected balance and when, whether anything goes negative, the next income date, the "
             "safe-to-spend amount, and the five largest upcoming bills. State the forecast's assumptions."
         )
@@ -1250,6 +1262,8 @@ def build_server(cfg: Config, *, read_only: bool = False) -> MCPServer:
                 date.fromisoformat(week_ending)
             except ValueError:
                 raise GuardError("week_ending must be a real date like 2026-10-11") from None
+            if date.fromisoformat(week_ending).weekday() != 6:
+                raise GuardError(SUNDAY_MESSAGE, code="invalid")
             arg = f' with week_ending="{week_ending}"'
         return (
             f"Call weekly_digest{arg}. Summarize it in under 200 words: spending vs usual, anything over budget, "

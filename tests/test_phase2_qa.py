@@ -657,7 +657,7 @@ async def test_no_secret_in_db_wal_backups_logs_or_any_mcp_surface_after_both_sy
             surfaces.append("".join(getattr(x, "text", "") for x in r.contents))
         for p in (await c.list_prompts()).prompts:
             # Prompts that validate their arguments (and refuse "x") get valid ones.
-            valid = {"week_ending": "2026-10-04", "year": "2025", "months": "6", "category": "Dining"}
+            valid = {"week_ending": "2026-10-04", "year": "2025", "months": "6", "category": "Dining", "days": "30"}
             args = {k.name: valid.get(k.name, "x") for k in (p.arguments or [])}
             if p.name == "spending_deep_dive":
                 args.pop("merchant", None)

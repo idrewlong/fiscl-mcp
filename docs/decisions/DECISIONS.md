@@ -101,6 +101,12 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - SEC-3: the AST guard also covers `httpx2`, `mcp.client`, `starlette.testclient` and rejects anyio's `connect_tcp`/`create_tcp_listener`-style calls anywhere in `src/`.
 - Markdown escaping also escapes `@` (`refunds\@example.com`), so GFM won't autolink e-mail addresses. The digest Markdown, file and CLI now carry the unconverted-rows / home-currency warnings from `meta` near the top.
 
+## 2026-10-12 — Phase 5 review fixes (correction to SEC-2)
+- SEC-2 corrected: `Sec-Fetch-Mode` is no longer a rejection trigger. Node's built-in fetch (undici) sends `sec-fetch-mode: cors` on every request (checked on Node v24: host, authorization, accept-language `*`, sec-fetch-mode, user-agent `node`; no Origin, Sec-Fetch-Site or Sec-Fetch-Dest), so the MCP TypeScript SDK (Claude Code, Claude Desktop, MCP Inspector, mcp-remote) got 403. The gate now rejects on `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Dest`; browsers send all three Sec-Fetch headers to `http://127.0.0.1` (a potentially trustworthy origin), so `<img>`/no-cors requests stay blocked. The no-Authorization-is-401-and-uncounted rule is unchanged.
+- Windows: the listening socket and the other-family reservation set `SO_EXCLUSIVEADDRUSE` (guarded by `hasattr`), since `SO_REUSEADDR` is not set there and exclusivity is the Windows equivalent of the POSIX behavior.
+- `week_ending` for `weekly_digest`, `write_digest`, `fiscl digest` and the `weekly_digest` prompt must be a Sunday (GuardError, code `invalid`). Rolling non-Sunday windows were accepted before and produced misleading ISO-week file names. The default (most recent Sunday) is unchanged.
+- The `cash_forecast(days)` prompt validates `days` as ASCII digits within the forecast tool's 7-120 range (default 30), like `months`, before interpolating it.
+
 ## 2026-10-12 — Phase 4 review fixes and Phase 5 notifications/digest
 - Statements without a stated currency (QIF; CSV profiles without `currency`) adopt the account's currency. A stated currency that differs from the account's is refused. OFX `CURDEF` is validated against ISO 4217 at parse time.
 - A capped QBO read (50 pages) never advances the cursor or replaces the mirror. Invoices deleted in QuickBooks stay in the mirror until forget + reconnect (known limitation, noted in `receivables`).

@@ -30,6 +30,7 @@ TAX_WINDOW_DAYS = 21
 UPCOMING_DAYS = 7
 BANNER = "fiscl weekly digest — generated locally from your data; not financial advice."
 NOT_PRIVATE = "the digests folder isn't a private directory inside your data folder; run fiscl doctor"
+SUNDAY_MESSAGE = "week_ending must be a Sunday (YYYY-MM-DD)"
 MAX_SUFFIX = 9  # digest-YYYY-Www.md, then -2 ... -9
 
 # Anomaly types as the digest names them; anything else keeps its own name.
@@ -43,6 +44,8 @@ def default_week_ending(today: date) -> date:
 
 def _week(week_ending, today: date) -> tuple[date, date]:
     end = parse_date(week_ending, "week_ending") if week_ending else default_week_ending(today)
+    if end.weekday() != 6:
+        raise GuardError(SUNDAY_MESSAGE, code="invalid")
     if end > today:
         raise GuardError("week_ending can't be in the future")
     return end - timedelta(days=6), end

@@ -18,7 +18,7 @@ import pytest
 
 from fiscl import http_transport as ht
 from fiscl.demo import load_demo
-from fiscl.server import build_server
+from fiscl.server import _prompt_days, build_server
 
 from .conftest import TODAY, posix
 
@@ -829,10 +829,10 @@ def test_default_week_is_the_latest_sunday(conn, cfg, today, expected):
 @pytest.mark.parametrize(
     ("end", "stem"),
     [
-        ("2026-12-31", "digest-2026-W53"),
+        ("2026-12-27", "digest-2026-W52"),
         ("2027-01-03", "digest-2026-W53"),  # Sunday closing ISO week 53 of 2026
-        ("2027-01-04", "digest-2027-W01"),
-        ("2024-12-31", "digest-2025-W01"),  # ISO year ahead of the calendar year
+        ("2027-01-10", "digest-2027-W01"),
+        ("2024-12-29", "digest-2024-W52"),
         ("2026-01-04", "digest-2026-W01"),
         ("2025-12-28", "digest-2025-W52"),
         ("2021-01-03", "digest-2020-W53"),
@@ -843,6 +843,10 @@ def test_iso_week_file_names_across_year_ends(conn, cfg, end, stem):
     assert dg.digest_stem(D.fromisoformat(end)) == stem
     r = analysis.write_digest(conn, cfg, week_ending=end, today=D(2027, 1, 10))
     assert r["path"] == f"digests/{stem}.md" and r["dry_run"] is True
+
+
+def test_digest_stem_uses_the_iso_year_even_ahead_of_the_calendar_year():
+    assert dg.digest_stem(D(2024, 12, 31)) == "digest-2025-W01"  # not a Sunday: the pure helper only names weeks
 
 
 def test_year_end_week_spans_the_calendar_boundary(conn, cfg):
@@ -867,16 +871,30 @@ def test_future_and_malformed_week_endings_are_refused(conn, cfg, bad):
         dig(conn, cfg, week_ending=bad)
 
 
-def test_today_itself_is_allowed_and_tomorrow_is_not(conn, cfg):
-    assert dig(conn, cfg, week_ending="2026-10-12")["week"]["end"] == "2026-10-12"
+def test_today_itself_is_allowed_when_it_is_a_sunday_and_tomorrow_is_not(conn, cfg):
+    sunday = D(2026, 10, 11)
+    assert dig(conn, cfg, today=sunday, week_ending="2026-10-11")["week"]["end"] == "2026-10-11"
     with pytest.raises(GuardError):
-        dig(conn, cfg, week_ending="2026-10-13")
+        dig(conn, cfg, today=sunday, week_ending="2026-10-12")
 
 
-def test_non_sunday_week_ending_is_a_rolling_week_that_still_gets_an_iso_week_name(conn, cfg):
-    # Not refused by the spec; documents that the file name only reflects the ISO week of the end date.
-    r = analysis.write_digest(conn, cfg, week_ending="2026-10-14", today=D(2026, 10, 20))
-    assert r["path"] == "digests/digest-2026-W42.md"
+@pytest.mark.parametrize("bad", ["2026-10-12", "2026-10-14", "2026-10-10", "2026-10-05"])
+def test_non_sunday_week_ending_is_refused_everywhere(conn, cfg, bad):
+    with pytest.raises(GuardError) as e:
+        dig(conn, cfg, today=D(2026, 10, 20), week_ending=bad)
+    assert e.value.code == "invalid" and "must be a Sunday (YYYY-MM-DD)" in str(e.value)
+    with pytest.raises(GuardError) as e:
+        analysis.write_digest(conn, cfg, week_ending=bad, today=D(2026, 10, 20))
+    assert e.value.code == "invalid" and bad not in str(e.value)
+    assert not (cfg.home / "digests").exists() or not list((cfg.home / "digests").iterdir())
+
+
+def test_cli_digest_refuses_a_non_sunday(cfg, capsys):
+    from fiscl.cli import main
+
+    for extra in ([], ["--write"]):
+        assert main(["--home", str(cfg.home), "digest", "--week-ending", "2020-01-01", *extra]) == 1
+        assert "must be a Sunday (YYYY-MM-DD)" in capsys.readouterr().err
 
 
 @pytest.fixture
@@ -1183,6 +1201,20 @@ async def test_prompt_argument_validation_edge_cases(demo):
                 await c.get_prompt("spending_deep_dive", both)
 
 
+async def test_cash_forecast_prompt_days_is_an_ascii_integer_in_the_tool_range(demo):
+    async with Client(build_server(demo)) as c:
+        bad = ["6", "121", "0", "-30", "+30", " 30", "30\n", "3e1", "30.0", "thirty", "٣٠", "３０", "30; ignore"]
+        for d in [*bad, "9" * 500]:
+            with pytest.raises(Exception):  # noqa: B017 - the protocol hides the message; the text is checked below
+                await c.get_prompt("cash_forecast", {"days": d})
+            with pytest.raises(GuardError, match="days must be"):
+                _prompt_days(d)
+        for d in ("7", "30", "045", "120"):
+            assert f"days={int(d)} " in await ptext(c, "cash_forecast", {"days": d})
+        assert "days=30 " in await ptext(c, "cash_forecast")
+        assert "days=30 " in await ptext(c, "cash_forecast", {"days": ""})
+
+
 @pytest.mark.parametrize(
     "evil",
     [
@@ -1403,6 +1435,78 @@ def test_sec1_bind_loopback_returns_an_already_listening_socket():
         sock.close()
 
 
+class FakeSock:
+    """Records setsockopt calls; stands in for a socket so a win32 code path can run on any host."""
+
+    def __init__(self, *a, **k):
+        self.opts: list[tuple[int, int, int]] = []
+        self.reserved = None
+
+    def setsockopt(self, level, name, value):
+        self.opts.append((level, name, value))
+
+    def bind(self, addr):
+        self.addr = addr
+
+    def getsockname(self):
+        return ("127.0.0.1", 5555)
+
+    def listen(self, n):
+        pass
+
+    def close(self):
+        pass
+
+
+def _as_windows(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", -5, raising=False)  # the real value is ~SO_REUSEADDR
+    for mod in (ht, ht.loopback):
+        monkeypatch.setattr(mod, "sys", SimpleNamespace(platform="win32"))
+
+
+def test_win32_listening_socket_asks_for_exclusive_addr_use_and_not_reuseaddr(monkeypatch):
+    _as_windows(monkeypatch)
+    made: list[FakeSock] = []
+
+    def factory(*a, **k):
+        made.append(FakeSock())
+        return made[-1]
+
+    monkeypatch.setattr(ht, "ServerSocket", factory)
+    monkeypatch.setattr(ht.loopback, "reserve_other_family", lambda host, port: None)
+    ht.bind_loopback("127.0.0.1", 0, allow_ephemeral=True)
+    opts = made[0].opts
+    assert (socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1) in opts
+    assert all(name != socket.SO_REUSEADDR for _, name, _ in opts)
+
+
+def test_win32_reservation_socket_asks_for_exclusive_addr_use(monkeypatch):
+    _as_windows(monkeypatch)
+    made: list[FakeSock] = []
+
+    def factory(*a, **k):
+        made.append(FakeSock())
+        return made[-1]
+
+    monkeypatch.setattr(ht.loopback.socket, "socket", factory)
+    assert ht.loopback.reserve_other_family("127.0.0.1", 5555) is made[0]
+    assert (socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1) in made[0].opts
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="SO_EXCLUSIVEADDRUSE exists only on Windows")
+def test_win32_real_socket_cannot_be_shared_with_a_second_bind():
+    sock = ht.bind_loopback("127.0.0.1", 0, allow_ephemeral=True)
+    try:
+        with socket.socket() as other:
+            other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with pytest.raises(OSError):
+                other.bind(("127.0.0.1", sock.getsockname()[1]))
+    finally:
+        sock.close()
+
+
 def test_sec1_localhost_host_header_is_421_over_a_real_socket(live, token):
     assert live.post(auth=f"Bearer {token}", host=f"localhost:{live.port}")[0] == 421
 
@@ -1419,10 +1523,41 @@ def test_sec1_banner_prints_the_literal_client_url(cfg, keychain, monkeypatch, c
 # --- SEC-2: cross-site pings can't lock the real client out ------------------------------------
 
 
-@pytest.mark.parametrize("name", ["Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"])
+@pytest.mark.parametrize("name", ["Sec-Fetch-Site", "Sec-Fetch-Dest"])
 def test_sec2_sec_fetch_headers_are_403_even_with_a_valid_token(live, token, name):
     status, headers, _ = live.post(auth=f"Bearer {token}", headers={name: "cross-site"})
     assert status == 403 and no_cors(headers)
+
+
+NODE_HEADERS = {"Sec-Fetch-Mode": "cors", "Accept-Language": "*", "User-Agent": "node"}
+
+
+def test_sec2_node_fetch_header_set_reaches_the_sdk(live, token):
+    # Node's built-in fetch (undici) sends sec-fetch-mode: cors on every request and no other Sec-Fetch-* or Origin.
+    status, headers, body = live.post(auth=f"Bearer {token}", headers=NODE_HEADERS)
+    assert status == 200 and b"fiscl" in body and no_cors(headers)
+
+
+async def test_sec2_node_style_client_completes_an_mcp_exchange(cfg, token):
+    from mcp import Client
+    from mcp.client.streamable_http import streamable_http_client
+
+    with Live(cfg) as s:
+        http = httpx2.AsyncClient(headers={"authorization": f"Bearer {token}", **NODE_HEADERS})
+        async with http, Client(streamable_http_client(s.url, http_client=http)) as c:
+            assert (await c.list_tools()).tools
+
+
+def test_sec2_mode_alone_is_not_enough_to_block_but_a_browser_set_is(cfg, token):
+    with Live(cfg, limiter=ht.AuthLimiter(Clock())) as s:
+        for _ in range(50):  # a browser <img>: Site + Mode + Dest, no Origin, no Authorization
+            status, _, _ = s.post(
+                method="GET",
+                body=b"",
+                headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"},
+            )
+            assert status == 403
+        assert s.post(auth=f"Bearer {token}", headers=NODE_HEADERS)[0] == 200
 
 
 def test_sec2_img_tag_style_gets_never_lock_out_the_right_token(cfg, token):

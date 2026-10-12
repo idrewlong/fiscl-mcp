@@ -163,3 +163,9 @@ Parallelism: 1 and 3 in separate worktrees immediately (conflict only in `server
 - **R6. Default port 8787 collides with something on the user's machine** (and Phase 4 QBO's callback default 8765 must differ). → Recommended: configurable `[http] port`, clear bind-failure message. Needs human decision? No.
 - **R7. Does HTTP mode change the human-gate story?** A scheduled agent over HTTP may run write tools without per-call approval. → Recommended: document that HTTP clients must keep per-call approval for write tools; dry-run defaults stay; consider `[http] read_only = true` (reject `LOCAL_*` tools over HTTP) as a follow-up if the owner wants scheduled agents read-only. Needs human decision? Yes — whether HTTP mode should default to read-only tools (recommended answer: no for v2, add the opt-in `read_only` flag later if scheduled agents are used).
 - **R8. Digest content leaving the machine.** The digest file stays local, but the tool result goes to the user's model like every other tool. → Recommended: same SECURITY.md framing; respect `redact_descriptions` in the digest (merchant names kept, descriptions never included). Needs human decision? No.
+
+## Build notes (2026-10-12)
+- `week_ending` must be a Sunday (tool, `write_digest`, CLI, prompt); anything else is refused with a fixed message.
+- HTTP clients must use the literal `http://127.0.0.1:PORT/mcp` (or `[::1]`); `localhost` is refused (421) and the other loopback family is reserved for the server's lifetime.
+- Browser detection: `Origin`, `Sec-Fetch-Site`, or `Sec-Fetch-Dest` → 403. `Sec-Fetch-Mode` alone is ignored because Node's fetch sends it on every request.
+- HTTP is read-only by default (deliberate change from R7; see DECISIONS 2026-10-11).

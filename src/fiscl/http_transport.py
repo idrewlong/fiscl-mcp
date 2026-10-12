@@ -107,6 +107,8 @@ def bind_loopback(host: str, port: int, *, allow_ephemeral: bool = False) -> soc
     try:
         if sys.platform != "win32":  # on Windows SO_REUSEADDR would let another process share the port
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        elif hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: refuse any other bind of this port, even with REUSEADDR
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         if family == socket.AF_INET6:
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
         sock.bind((host, port))
@@ -253,8 +255,8 @@ def _bearer(values: list[str]) -> str | None:
 
 
 class GateMiddleware:
-    """Outermost ASGI app. Order: client address, Host, Origin/Sec-Fetch-*, path/method, Authorization present,
-    rate limit, bearer, content type."""
+    """Outermost ASGI app. Order: client address, Host, Origin/Sec-Fetch-Site/Sec-Fetch-Dest (Sec-Fetch-Mode alone is
+    allowed: Node's fetch sends it), path/method, Authorization present, rate limit, bearer, content type."""
 
     def __init__(
         self,
@@ -290,8 +292,10 @@ class GateMiddleware:
         for k, v in scope.get("headers", []):
             if k == b"host":
                 host_values.append(v.decode("latin-1"))
-            elif k in (b"origin", b"sec-fetch-site", b"sec-fetch-mode", b"sec-fetch-dest"):
-                # Browsers add Sec-Fetch-* to every request, even no-CORS ones like <img src> that carry no Origin.
+            elif k in (b"origin", b"sec-fetch-site", b"sec-fetch-dest"):
+                # Browsers add Sec-Fetch-Site/Mode/Dest to every request, even no-CORS ones like <img src> that carry no
+                # Origin. Sec-Fetch-Mode alone is NOT checked: Node's fetch (undici, used by the MCP TypeScript SDK)
+                # sends `sec-fetch-mode: cors` on every request, and a browser always sends Site and Dest as well.
                 has_origin = True
             elif k == b"authorization":
                 auth_values.append(v.decode("latin-1"))

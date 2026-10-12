@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import errno
 import socket
+import sys
 
 OTHER_FAMILY = {"127.0.0.1": ("::1", socket.AF_INET6), "::1": ("127.0.0.1", socket.AF_INET)}
 
@@ -30,6 +31,8 @@ def reserve_other_family(host: str, port: int) -> socket.socket | None:
     except OSError:
         return None
     try:
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # nobody else may share the port
         if family == socket.AF_INET6:
             sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)  # only ::1; 127.0.0.1 stays separate
         sock.bind((other, port))
