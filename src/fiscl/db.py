@@ -217,6 +217,11 @@ MIGRATIONS: list[str] = [
         UNIQUE (provider, item_ref_hash)
     );
     """,
+    # 5 — v2 phase 2B: Plaid /transactions/sync cursor per Item. A cursor is an opaque bookmark, not a secret.
+    # Down: ALTER TABLE connections DROP COLUMN cursor;  (SQLite 3.35+)
+    """
+    ALTER TABLE connections ADD COLUMN cursor TEXT;
+    """,
 ]
 
 # The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).

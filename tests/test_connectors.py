@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from fiscl.sync import base, connect, teller
+from fiscl.sync import base, connect, plaid, teller
 from fiscl.sync.base import Policy, SyncError
 
 SRC = Path(__file__).resolve().parent.parent / "src"
@@ -158,7 +158,20 @@ def test_policy_is_per_connector():
 
 # --- read-only by construction: forbidden endpoint strings never appear in src/ -----------------------
 
-FORBIDDEN = ("/transfer", "/payment_initiation", "/processor", "/bank_transfer", "/payments", "/details")
+FORBIDDEN = (
+    "/transfer",
+    "/payment_initiation",
+    "/processor",
+    "/bank_transfer",
+    "/payments",
+    "/details",
+    "/auth/get",
+    "/identity/get",
+    "/signal/",
+    "/income/",
+    "/investments/",
+    "/accounts/balance/get",
+)
 
 
 def test_source_contains_no_money_movement_or_account_number_endpoints():
@@ -171,6 +184,8 @@ def test_source_contains_no_money_movement_or_account_number_endpoints():
 
 def test_connector_modules_never_ask_for_forbidden_products():
     assert teller.PRODUCTS == ["transactions", "balance"]
+    assert plaid.PLAID_PRODUCTS == ("transactions",)
+    assert "products" not in connect.plaid_page("link-x", "n")
     page = connect.teller_page("app_1", "sandbox", "nonce")
     assert '["transactions", "balance"]' in page
     for word in ("payments", "verify", "identity"):
@@ -519,7 +534,7 @@ def test_connect_teller_end_to_end_stores_token_in_keychain_only(cfg, conn, keyc
 
 def test_connections_table_has_no_secret_columns(conn):
     cols = [r["name"] for r in conn.execute("PRAGMA table_info(connections)")]
-    assert cols == ["id", "provider", "institution", "item_ref_hash", "created_at", "last_sync_at", "status"]
+    assert cols == ["id", "provider", "institution", "item_ref_hash", "created_at", "last_sync_at", "status", "cursor"]
     with pytest.raises(Exception, match="CHECK"):
         conn.execute("INSERT INTO connections (provider, item_ref_hash, created_at) VALUES ('evil', 'x', 'now')")
 
@@ -527,7 +542,7 @@ def test_connections_table_has_no_secret_columns(conn):
 def test_connectors_satisfy_the_protocol(cfg):
     from fiscl.sync.simplefin import SimpleFinConnector
 
-    for c in (SimpleFinConnector(cfg), teller.TellerConnector(cfg, [])):
+    for c in (SimpleFinConnector(cfg), teller.TellerConnector(cfg, []), plaid.PlaidConnector(cfg, [])):
         assert c.provider in base.PROVIDERS and c.warnings == []
         assert callable(c.fetch) and callable(c.forget)
 
@@ -545,12 +560,10 @@ def test_simplefin_still_uses_its_own_allowlist(no_sockets):
         )
 
 
-def test_cli_connect_list_plaid_stub_and_forget(cfg, keychain, capsys):
+def test_cli_connect_list_and_forget(cfg, keychain, capsys):
     from fiscl import cli
 
     home = ["--home", str(cfg.home)]
     assert cli.main([*home, "connect", "list"]) == 0
     assert json.loads(capsys.readouterr().out)["connections"] == []
-    assert cli.main([*home, "connect", "plaid"]) == 1
-    assert "coming" in capsys.readouterr().err
     assert cli.main([*home, "connect", "forget", "simplefin"]) == 0

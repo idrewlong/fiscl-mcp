@@ -54,6 +54,7 @@ class DebtTerms:
 
 
 TELLER_ENVIRONMENTS = ("development", "sandbox", "production")
+PLAID_ENVIRONMENTS = ("sandbox", "production")  # Plaid has no "development" host any more
 
 
 @dataclass
@@ -68,6 +69,7 @@ class Config:
     tax: TaxConfig = field(default_factory=TaxConfig)
     debts: dict[str, DebtTerms] = field(default_factory=dict)
     teller_environment: str = "development"  # [connectors.teller] environment
+    plaid_environment: str = "sandbox"  # [connectors.plaid] environment
 
     @property
     def db_path(self) -> Path:
@@ -291,10 +293,14 @@ def load_config(home: Path | None = None) -> Config:
     teller_env = (raw.get("connectors", {}).get("teller", {}) or {}).get("environment", "development")
     if teller_env not in TELLER_ENVIRONMENTS:
         raise ConfigError(f"connectors.teller.environment must be one of {', '.join(TELLER_ENVIRONMENTS)}")
+    plaid_env = (raw.get("connectors", {}).get("plaid", {}) or {}).get("environment", "sandbox")
+    if plaid_env not in PLAID_ENVIRONMENTS:
+        raise ConfigError(f"connectors.plaid.environment must be one of {', '.join(PLAID_ENVIRONMENTS)}")
     return Config(
         home=home,
         tax=tax,
         teller_environment=teller_env,
+        plaid_environment=plaid_env,
         debts=_load_debts(raw.get("debts", {}), currency.upper()),
         currency=currency.upper(),
         timezone=str(raw.get("timezone", "America/Chicago")),

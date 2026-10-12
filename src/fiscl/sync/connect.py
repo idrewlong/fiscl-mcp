@@ -1,4 +1,4 @@
-"""Human-only connection flow: a one-shot localhost server that hosts the provider's Connect widget.
+"""Human-only connection flow: a one-shot localhost server that hosts the provider's Connect/Link widget.
 
 This is only ever started from the CLI (`fiscl connect ...`), never from an MCP tool, so a model can't open a
 bank connection. The server binds to 127.0.0.1 on a random port, serves one page under a random 32-byte URL
@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..config import Config
 from ..guard import clean_text
-from . import base, connections, teller
+from . import base, connections, plaid, teller
 from .base import SyncError
 
 TIMEOUT_SECONDS = 600
@@ -33,9 +33,14 @@ TELLER_CONNECT_SCRIPT = "https://cdn.teller.io/connect/connect.js"
 # violations in the console, and narrow this list to exactly the hosts Connect needs.
 TELLER_CONNECT_HOSTS = ("https://cdn.teller.io", "https://teller.io", "https://*.teller.io")
 
+PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"
+# Plaid's documented Link CSP needs cdn.plaid.com (script, frame) and the Plaid API hosts (connect).
+PLAID_LINK_HOSTS = ("https://cdn.plaid.com", "https://*.plaid.com")
+
 _APP_ID = re.compile(r"[A-Za-z0-9_\-]{1,100}")
 _TOKEN = re.compile(r"[A-Za-z0-9_\-.=]{1,512}")
 _ENROLLMENT = re.compile(r"[A-Za-z0-9_\-]{1,100}")
+_PUBLIC_TOKEN = re.compile(r"public-[A-Za-z0-9_\-]{1,200}")
 
 
 class OneShotServer(HTTPServer):
@@ -116,6 +121,9 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, SyncError) as exc:
             self.server.error = str(exc) if isinstance(exc, SyncError) else "the result wasn't valid"
             return self._send(400, json.dumps({"ok": False, "error": self.server.error}).encode(), "application/json")
+        except Exception:  # a bug or a full disk must not look like success
+            self.server.error = "fiscl couldn't save the connection; see the terminal"
+            return self._send(500, json.dumps({"ok": False, "error": self.server.error}).encode(), "application/json")
         self._send(200, b'{"ok": true}', "application/json")
 
     def _nope(self):
@@ -138,6 +146,24 @@ def serve_once(server: OneShotServer, timeout: float = TIMEOUT_SECONDS) -> None:
         raise SyncError(server.error)
 
 
+def run_flow(
+    server: OneShotServer,
+    label: str,
+    open_browser: Callable[[str], object],
+    timeout: float,
+    announce: Callable[[str], None],
+) -> None:
+    """Announce, open the browser (or print the link), and wait for the single POST."""
+    announce(f"Opening your browser to connect a bank ({label}). Waiting up to 10 minutes...")
+    if not open_browser(server.url):
+        announce(f"Open this link in your browser: {server.url}")
+    serve_once(server, timeout)
+
+
+def _js(value) -> str:
+    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
 # --- Teller ---------------------------------------------------------------------------------
 
 
@@ -157,10 +183,6 @@ def teller_csp(nonce: str) -> str:
             "frame-ancestors 'none'",
         ]
     )
-
-
-def _js(value) -> str:
-    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def teller_page(app_id: str, environment: str, nonce: str) -> str:
@@ -254,8 +276,115 @@ def connect_teller(
         lambda nonce: (teller_page(app_id, env, nonce), teller_csp(nonce)),
         lambda data: save_teller_enrollment(conn, data),
     )
-    announce(f"Opening your browser to connect a bank (Teller {env}). Waiting up to 10 minutes...")
-    if not open_browser(server.url):
-        announce(f"Open this link in your browser: {server.url}")
-    serve_once(server, timeout)
+    run_flow(server, f"Teller {env}", open_browser, timeout, announce)
     return "teller"
+
+
+# --- Plaid ----------------------------------------------------------------------------------
+
+
+def plaid_csp(nonce: str) -> str:
+    hosts = " ".join(PLAID_LINK_HOSTS)
+    return "; ".join(
+        [
+            "default-src 'none'",
+            f"script-src 'nonce-{nonce}' {hosts}",
+            f"style-src 'unsafe-inline' {hosts}",  # Link injects its own styles
+            f"frame-src {hosts}",
+            f"connect-src 'self' {hosts}",
+            f"img-src data: {hosts}",
+            f"font-src {hosts}",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ]
+    )
+
+
+def plaid_page(link_token: str, nonce: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>fiscl: connect a bank</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem">
+<h1>Connect a bank to fiscl</h1>
+<p>Read-only: fiscl asks Plaid for transactions and balances only. The access token is stored in your
+OS keychain on this machine.</p>
+<button id="go" type="button">Connect your bank</button>
+<p id="status" role="status"></p>
+<script src="{PLAID_LINK_SCRIPT}"></script>
+<script nonce="{nonce}">
+(function () {{
+  var status = document.getElementById("status");
+  function say(t) {{ status.textContent = t; }}
+  var handler;
+  try {{
+    handler = Plaid.create({{
+      token: {_js(link_token)},
+      onSuccess: function (publicToken, metadata) {{
+        var inst = (metadata && metadata.institution) || {{}};
+        var body = {{ public_token: publicToken, institution: {{ name: inst.name }} }};
+        fetch(location.pathname, {{ method: "POST", headers: {{ "Content-Type": "application/json" }},
+                                   body: JSON.stringify(body) }})
+          .then(function (r) {{ return r.json(); }})
+          .then(function (j) {{ say(j.ok ? "Connected. You can close this tab and go back to the terminal."
+                                          : "Not saved: " + j.error); }})
+          .catch(function () {{ say("Could not reach fiscl on this machine."); }});
+      }},
+      onExit: function () {{ say("Closed without connecting."); }}
+    }});
+  }} catch (err) {{
+    say("Plaid Link didn't load. Check your connection and the terminal.");
+  }}
+  document.getElementById("go").addEventListener("click", function () {{ if (handler) handler.open(); }});
+}})();
+</script></body></html>
+"""
+
+
+def parse_plaid_result(data: dict) -> tuple[str, str]:
+    """Validate what the page posted. Returns (public_token, institution)."""
+    token = data.get("public_token")
+    if not isinstance(token, str) or not _PUBLIC_TOKEN.fullmatch(token):
+        raise SyncError("Plaid's result was missing a public token")
+    inst = data.get("institution")
+    name = inst.get("name") if isinstance(inst, dict) else None
+    return token, clean_text(name if isinstance(name, str) else "", 80)
+
+
+def save_plaid_item(conn: sqlite3.Connection, client: plaid.PlaidClient, data: dict) -> str:
+    """Exchange the public token, store the access token in the keychain, then record the connection (rolling the
+    keychain entry back if the row fails). The access token never touches the DB."""
+    public_token, institution = parse_plaid_result(data)
+    access, item_id = plaid.exchange_public_token(client, public_token)
+    ref = connections.item_ref_hash("plaid", item_id)
+    plaid.store_access_token(ref, access)
+    try:
+        connections.add_connection(conn, "plaid", institution, ref)
+        conn.commit()
+    except Exception:
+        base.secret_delete(base.secret_name("plaid", ref))
+        raise
+    return institution
+
+
+def connect_plaid(
+    cfg: Config,
+    conn: sqlite3.Connection,
+    open_browser: Callable[[str], object] = webbrowser.open,
+    timeout: float = TIMEOUT_SECONDS,
+    announce: Callable[[str], None] = lambda msg: None,
+    opener=None,
+) -> str:
+    """Run the whole flow. The Plaid keys must already be in the keychain; the CLI collects them first.
+    The link token is created here (server side) and is the only thing the page receives."""
+    base.keyring_backend()  # no keychain, no connection
+    client_id, secret = plaid.load_app_credentials()
+    client = plaid.PlaidClient(cfg.plaid_environment, client_id, secret, opener)
+    link_token = plaid.create_link_token(client)
+    server = make_server(
+        secrets.token_urlsafe(32),
+        lambda nonce: (plaid_page(link_token, nonce), plaid_csp(nonce)),
+        lambda data: save_plaid_item(conn, client, data),
+    )
+    run_flow(server, f"Plaid {cfg.plaid_environment}", open_browser, timeout, announce)
+    return "plaid"

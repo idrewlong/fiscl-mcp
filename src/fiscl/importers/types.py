@@ -11,6 +11,10 @@ class ParsedTxn:
     memo: str | None = None
     fitid: str | None = None
     pending: bool = False
+    # Bank-sync extras (None/False for files): a posted row that supersedes the pending row with this fitid, and
+    # a row the provider says changed since it was imported (update in place, keep the user's edits).
+    replaces_fitid: str | None = None
+    modified: bool = False
 
 
 @dataclass

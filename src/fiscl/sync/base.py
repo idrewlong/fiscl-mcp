@@ -1,4 +1,4 @@
-"""Shared layer for every read-only bank connector (SimpleFIN, Teller, and later Plaid).
+"""Shared layer for every read-only bank connector (SimpleFIN, Teller, Plaid).
 
 Four things live here so each connector stays small and none can bypass the rules:
 
@@ -38,9 +38,10 @@ MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 class SyncError(RuntimeError):
     """A connector problem whose message is safe to show (no tokens, names, or amounts)."""
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(self, message: str, status: int | None = None, body: bytes | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.body = body  # provider error payload (capped); for connectors to read a code, never to display
 
 
 # --- HTTP -----------------------------------------------------------------------------------
@@ -113,6 +114,13 @@ class Policy:
         return parts
 
 
+def _error_body(exc: urllib.error.HTTPError) -> bytes | None:
+    try:
+        return exc.read(65536)
+    except Exception:
+        return None
+
+
 def request(
     policy: Policy,
     method: str,
@@ -143,7 +151,7 @@ def request(
                 f"{policy.label} answered with a redirect (HTTP {exc.code}); fiscl doesn't follow redirects",
                 exc.code,
             ) from exc
-        raise SyncError(f"{policy.label} returned HTTP {exc.code}", exc.code) from exc
+        raise SyncError(f"{policy.label} returned HTTP {exc.code}", exc.code, _error_body(exc)) from exc
     except urllib.error.URLError as exc:
         raise SyncError(f"couldn't reach {policy.label}: {exc.reason}") from exc
     except TimeoutError as exc:

@@ -232,6 +232,23 @@ def _ensure_teller_credentials(cfg) -> None:
     teller.store_app_credentials(app_id or "", cert, key)
 
 
+def _ensure_plaid_credentials() -> None:
+    """Collect the user's Plaid client_id and secret with hidden input; they go only to the keychain."""
+    import getpass
+
+    from .sync import plaid
+
+    if plaid.has_app_credentials():
+        return
+    print(
+        "Plaid keys are in your dashboard under Developers > Keys (use the secret for your environment).",
+        file=sys.stderr,
+    )
+    plaid.store_app_credentials(
+        getpass.getpass("Plaid client_id (hidden): ").strip(), getpass.getpass("Plaid secret (hidden): ").strip()
+    )
+
+
 def cmd_connect(cfg, args) -> int:
     import getpass
 
@@ -249,12 +266,16 @@ def cmd_connect(cfg, args) -> int:
             with open_db(cfg) as conn:
                 registry.forget(conn, cfg, args.provider, args.institution)
             print(f"Disconnected {args.provider}" + (f" ({args.institution})" if args.institution else "") + ".")
-        elif args.target == "plaid":
-            say("Plaid support is coming in the next release. Use `fiscl connect teller` or `fiscl connect simplefin`.")
-            return 1
         else:
             base.keyring_backend()  # refuse before asking for anything
-            if args.target == "teller":
+            if args.target == "plaid":
+                if cfg.plaid_environment == "production":
+                    say("Plaid environment is 'production': this needs your own approved Plaid app (Trial = 10 Items).")
+                _ensure_plaid_credentials()
+                with open_db(cfg) as conn:
+                    connect.connect_plaid(cfg, conn, announce=say)
+                print("Connected. Ask your assistant to sync_accounts, or run `fiscl sync run`.")
+            elif args.target == "teller":
                 if cfg.teller_environment == "production":
                     say("Teller environment is 'production' (needs Teller business verification).")
                 _ensure_teller_credentials(cfg)
@@ -437,7 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("connect", help="connect a bank for read-only sync (human-only; never an MCP tool)")
     a = s.add_subparsers(dest="target", required=True)
     a.add_parser("teller", help="connect through Teller (recommended; needs your own Teller developer account)")
-    a.add_parser("plaid", help="connect through Plaid (coming next)")
+    a.add_parser("plaid", help="connect through Plaid (needs your own Plaid developer account)")
     a.add_parser("simplefin", help="connect with a SimpleFIN setup token")
     a.add_parser("list", help="show connected banks (no secrets)")
     x = a.add_parser("forget", help="revoke access and delete the stored credentials")

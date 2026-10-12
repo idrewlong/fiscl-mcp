@@ -1,6 +1,6 @@
 """Orchestration over connectors: which providers are connected, run a sync, list and forget connections.
 
-A new provider (Plaid next) plugs in by adding a branch to `build_connector`; the import pipeline, dedupe,
+A new provider plugs in by adding a branch to `build_connector`; the import pipeline, dedupe,
 transfer matching, rules, and recurring detection are shared.
 """
 
@@ -16,7 +16,7 @@ from ..common import meta
 from ..config import Config
 from ..guard import GuardError, choice
 from ..importers.core import ImportResult, import_statements, post_import
-from . import connections, simplefin
+from . import connections, plaid, simplefin
 from .base import PROVIDERS, Connector, SyncError
 from .teller import TellerConnector, TellerItem
 
@@ -37,9 +37,13 @@ def build_connector(provider: str, conn: sqlite3.Connection, cfg: Config, opener
     if provider == "teller":
         items = [TellerItem(r["item_ref_hash"], r["institution"]) for r in rows]
         return TellerConnector(cfg, items, opener=opener)
+    if provider == "plaid":
+        return plaid.PlaidConnector(
+            cfg, [plaid.PlaidItem(r["item_ref_hash"], r["institution"], r["cursor"]) for r in rows], opener
+        )
     if provider == "simplefin":
         return simplefin.SimpleFinConnector(cfg)
-    raise SyncError("that provider isn't available yet")  # plaid: next slice
+    raise SyncError("unknown provider")
 
 
 def _digest(provider: str, start: date, end: date, statements) -> str:
@@ -73,6 +77,9 @@ def run_connector(
         result = import_statements(
             conn, cfg, statements, f"{connector.provider.title()} sync {start}..{today}", digest, post_process=False
         )
+    finalize = getattr(connector, "finalize", None)  # cursor connectors: advance bookmarks only after a good import
+    if finalize and (result is None or result.status == "ok"):
+        finalize(conn)
     post = post_import(conn, cfg, today=today)
     return {
         "accounts": sorted(set(result.accounts)) if result else [],
@@ -186,7 +193,10 @@ def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: st
             from .teller import forget_app_credentials
 
             forget_app_credentials()
-    else:
-        raise SyncError("that provider isn't available yet")
+    elif provider == "plaid":
+        connector = build_connector(provider, conn, cfg, opener, institution)
+        connector.forget()  # raises (keeping the token) if Plaid couldn't be told
+        if institution is None:
+            plaid.forget_app_credentials()
     connections.delete_rows(conn, provider, [r["item_ref_hash"] for r in rows])
     conn.commit()

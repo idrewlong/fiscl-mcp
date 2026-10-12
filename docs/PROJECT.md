@@ -418,7 +418,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 ### v2 — Connected, forward-looking, preparer-ready
 
 **Data**
-- [ ] Teller and Plaid connectors (bring your own keys, read-only)
+- [x] Teller and Plaid connectors (bring your own keys, read-only; human live checks pending, see DECISIONS)
 - [ ] **QuickBooks Online read-only** (invoices, A/R, P&L)
 - [ ] Amazon order-history splitting
 - [ ] Holdings and crypto import

@@ -59,7 +59,18 @@ fiscl connect list
 fiscl connect forget teller # revokes access at Teller and deletes the stored credentials
 ```
 
-Then ask your assistant to run `sync_accounts` (all connected providers, or `provider: teller`) and `list_connections`.
+Plaid (alternative): create your own developer account at plaid.com. Sandbox works immediately with test banks; real banks need an approved production app (the Trial plan covers 10 Items, and removing an Item does not free its slot). The data flows bank -> Plaid -> your machine; Plaid holds the bank connection and sees the data in transit. fiscl only ever asks Plaid for the `transactions` product (balances and transactions), never account numbers, identity, or transfers.
+
+```bash
+uv sync --extra sync
+# optional, in ~/fiscl/config.toml:  [connectors.plaid]  environment = "sandbox"   # default; or "production"
+fiscl connect plaid         # asks for your client_id and secret (hidden) once, then opens Plaid Link in your browser
+fiscl connect forget plaid  # calls /item/remove at Plaid and deletes the stored credentials
+```
+
+Sync is incremental (Plaid's cursor): the first pull imports what Plaid has, later pulls add new, changed, and removed transactions, and pending charges are replaced by their posted versions without losing your notes, tags, or categories.
+
+Then ask your assistant to run `sync_accounts` (all connected providers, or `provider: teller | plaid | simplefin`) and `list_connections`.
 
 ## What it can do
 

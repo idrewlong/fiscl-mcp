@@ -175,6 +175,7 @@ async def run(home: Path) -> Smoke:
             ("log_trip", {"trip_date": "2999-01-01", "miles": 5, "purpose": "future trip"}),
             # not connected in a fresh demo home; must fail cleanly, not reach the network
             ("sync_accounts", {"provider": "teller"}),
+            ("sync_accounts", {"provider": "plaid"}),
             ("sync_accounts", {"provider": "bogus"}),
         ]
         for tool, args in bad:

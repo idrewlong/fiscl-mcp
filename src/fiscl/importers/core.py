@@ -134,6 +134,26 @@ def _carry_edits(conn: sqlite3.Connection, pend: sqlite3.Row, new_id: int, amoun
     return carried, dropped
 
 
+def _update_in_place(conn: sqlite3.Connection, account_id: int, t, merchant: str) -> bool:
+    """Apply a provider-reported change to a row we already hold (matched by fitid). The user's category, note,
+    tags, and scope stay; a split that no longer sums to the new amount is dropped rather than kept invalid.
+    Returns False when the row isn't there yet, so the caller inserts it."""
+    row = conn.execute(
+        "SELECT id, amount FROM transactions WHERE account_id = ? AND fitid = ?", (account_id, t.fitid)
+    ).fetchone()
+    if row is None:
+        return False
+    if row["amount"] != t.amount:
+        conn.execute("DELETE FROM splits WHERE transaction_id = ?", (row["id"],))
+    key = "f:" + t.fitid if not t.pending else None
+    conn.execute(
+        """UPDATE OR IGNORE transactions SET posted_date = ?, amount = ?, raw_description = ?, merchant = ?,
+             memo = ?, is_pending = ?, dedupe_key = COALESCE(?, dedupe_key) WHERE id = ?""",
+        (t.posted_date, t.amount, t.description, merchant, t.memo, int(t.pending), key, row["id"]),
+    )
+    return True
+
+
 def _insert_statement(
     conn: sqlite3.Connection, stmt: ParsedStatement, account: sqlite3.Row, import_id: int, aliases
 ) -> tuple[int, int, int, int, int]:
@@ -149,8 +169,18 @@ def _insert_statement(
             ident = (t.posted_date, t.amount, t.description.lower(), t.pending)
             occurrences[ident] = occurrences.get(ident, 0) + 1
             key = ("p:" if t.pending else "") + _dedupe_key(t.posted_date, t.amount, t.description, occurrences[ident])
+        if t.modified and t.fitid and _update_in_place(conn, account["id"], t, merchant):
+            skipped += 1
+            continue
         pend = None
-        if not t.pending:
+        if not t.pending and t.replaces_fitid:
+            # The provider named the pending row this one supersedes: exact, so tips and edits still carry over.
+            pend = conn.execute(
+                """SELECT id, note, category_id, category_source, scope FROM transactions
+                   WHERE account_id = ? AND is_pending = 1 AND fitid = ?""",
+                (account["id"], t.replaces_fitid),
+            ).fetchone()
+        if not t.pending and pend is None:
             # A posted row replaces a matching pending row from up to 7 days earlier.
             start = (date.fromisoformat(t.posted_date) - timedelta(days=7)).isoformat()
             pend = conn.execute(
