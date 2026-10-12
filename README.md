@@ -102,7 +102,7 @@ Tools that change local data default to a dry run (`dry_run=true`) that shows th
 Account identity uses a per-install secret key (OS keychain, or a `0600` `.install_key` file in the data folder). Backups contain the database only, so back the key up separately from your database backups (a password manager is a good place):
 
 ```bash
-fiscl key export ~/Desktop/fiscl-key.txt   # new owner-only file; asks for a hidden confirmation; never printed
+fiscl key export ~/fiscl-key.txt   # new owner-only file; asks for a hidden confirmation; never printed
 fiscl key import ~/Desktop/fiscl-key.txt   # on the new machine, before importing anything
 ```
 

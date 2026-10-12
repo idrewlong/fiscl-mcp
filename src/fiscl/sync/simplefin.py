@@ -16,9 +16,10 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ..config import Config
-from ..guard import clean_text
+from ..guard import GuardError, clean_text
 from ..importers.core import ImportResult, import_statements
 from ..importers.types import ParsedStatement, ParsedTxn
+from ..installkey import KEY_MISSING_MESSAGE, is_key_missing_error
 from ..money import AmountError, parse_amount
 from . import base
 from .base import TIMEOUT, Policy, SyncError, open_url
@@ -251,7 +252,10 @@ def sync(
         already = conn.execute("SELECT 1 FROM imports WHERE file_sha256 = ? AND status = 'ok'", (digest,)).fetchone()
         if statements and not already:
             label = f"SimpleFIN sync {window_start}..{window_end}"
-            results.append(import_statements(conn, cfg, statements, label, digest, post_process=False))
+            imported = import_statements(conn, cfg, statements, label, digest, post_process=False)
+            if imported.status == "failed" and is_key_missing_error(imported.error):
+                raise GuardError(KEY_MISSING_MESSAGE, code="key_missing")
+            results.append(imported)
         window_end = window_start - timedelta(days=1)
         remaining -= span
     from ..importers.core import post_import

@@ -16,6 +16,7 @@ from ..common import meta
 from ..config import Config
 from ..guard import GuardError, choice
 from ..importers.core import ImportResult, import_statements, post_import
+from ..installkey import KEY_MISSING_MESSAGE, KeyMissing, is_key_missing_error, require_usable_key
 from . import connections, plaid, simplefin
 from .base import PROVIDERS, Connector, SyncError
 from .teller import TellerConnector, TellerItem
@@ -77,6 +78,8 @@ def run_connector(
         result = import_statements(
             conn, cfg, statements, f"{connector.provider.title()} sync {start}..{today}", digest, post_process=False
         )
+    if result is not None and result.status == "failed" and is_key_missing_error(result.error):
+        raise GuardError(KEY_MISSING_MESSAGE, code="key_missing")
     finalize = getattr(connector, "finalize", None)  # cursor connectors: advance bookmarks only after a good import
     if finalize and (result is None or result.status == "ok"):
         finalize(conn)
@@ -114,6 +117,11 @@ def sync_accounts(
     if provider != "all" and provider not in connected:
         raise GuardError(f"{provider} isn't connected. The user can run `fiscl connect {provider}`.", code="not_found")
     targets = connected if provider == "all" else [provider]
+    if targets:
+        try:
+            require_usable_key(conn, cfg)  # before any network call or write
+        except KeyMissing as exc:
+            raise GuardError(str(exc), code="key_missing") from exc
     results: dict[str, dict] = {}
     errors: list[dict] = []
     for p in targets:

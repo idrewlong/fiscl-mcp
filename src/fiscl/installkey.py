@@ -134,6 +134,45 @@ def has_hashed_accounts(conn) -> bool:
     return bool(conn.execute("SELECT 1 FROM accounts WHERE acct_hash IS NOT NULL LIMIT 1").fetchone())
 
 
+KEY_MISSING_MESSAGE = (
+    "this database's install key isn't available on this machine; run `fiscl doctor` and restore it with "
+    "`fiscl key import PATH`"
+)
+
+
+class KeyMissing(Exception):
+    """The database was hashed under a key this machine doesn't have. Fixed prose only."""
+
+    def __init__(self) -> None:
+        super().__init__(KEY_MISSING_MESSAGE)
+
+
+def is_key_missing_error(error: str | None) -> bool:
+    return bool(error) and error.startswith(KEY_MISSING_MESSAGE[:40])
+
+
+def require_usable_key(conn, cfg: Config, account_keys: list[str] | None = None) -> None:
+    """Refuse to hash accounts under a key that isn't the database's. Never mints a key.
+
+    A recorded fingerprint must match the key we would use; with hashed accounts but no recorded fingerprint, a key
+    must at least exist (a missing one would otherwise be silently replaced and every account would be duplicated).
+    The exception is a database from before keyed hashes: if one of `account_keys` matches an account's legacy
+    unkeyed hash, minting a key is the upgrade path. `account_keys=None` skips that unrecorded-fingerprint rule (the
+    importer repeats the check with the real keys). A fresh database passes, so the first import can create the key."""
+    current = _CACHE.get(str(cfg.home))  # the key hashing would actually use
+    if current is None:
+        current = _existing(cfg, _keychain())
+    recorded = stored_fingerprint(conn)
+    if recorded is not None:
+        if current is None or fingerprint(current) != recorded:
+            raise KeyMissing
+    elif current is None and account_keys and has_hashed_accounts(conn):  # no keys to hash: nothing can split
+        legacy = [legacy_account_hash(k) for k in account_keys]
+        marks = ",".join("?" * len(legacy))
+        if not conn.execute(f"SELECT 1 FROM accounts WHERE acct_hash IN ({marks})", legacy).fetchone():
+            raise KeyMissing
+
+
 def _write_private(path, key: bytes, *, replace: bool) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.unlink(missing_ok=True)

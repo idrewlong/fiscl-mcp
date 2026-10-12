@@ -11,7 +11,14 @@ from pathlib import Path
 from ..config import Config, load_rules_raw
 from ..db import add_account, find_account
 from ..guard import clean_text
-from ..installkey import account_hash, has_hashed_accounts, legacy_account_hash, record_fingerprint
+from ..installkey import (
+    KeyMissing,
+    account_hash,
+    has_hashed_accounts,
+    legacy_account_hash,
+    record_fingerprint,
+    require_usable_key,
+)
 from ..normalize import load_aliases, normalize_merchant
 from .csv_import import CSVImportError, parse_csv
 from .ofx import OFXError, looks_like_ofx, parse_ofx
@@ -300,6 +307,12 @@ def import_statements(
     """Insert parsed statements from any source (file or bank sync) as one atomic import."""
     result = result or ImportResult(filename=label, status="ok")
     result.format = statements[0].format if statements else "none"
+    try:
+        require_usable_key(
+            conn, cfg, [s.account_key for s in statements if s.account_key]
+        )  # before any account is resolved: a missing key must never create duplicates
+    except KeyMissing as exc:
+        return _record_failure(conn, label, result.format, digest, result, str(exc), dry_run)
     aliases = load_aliases(load_rules_raw(cfg))
     savepoint = "fiscl_import"
     conn.execute(f"SAVEPOINT {savepoint}")

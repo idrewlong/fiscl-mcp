@@ -2,7 +2,7 @@
 
 > A local-first finance server that speaks the Model Context Protocol (MCP), so any MCP client (Claude Desktop, Claude Code, Cursor, etc.) can answer questions about your money, for your household and your business, from your own data on your own machine.
 
-Status: **v1 working** (190 tests passing; v2 Phase 1 done). Checked boxes in §15 are implemented.
+Status: **v1 working** (557 tests passing; v2 Phases 1–2 done, bank connectors pending live checks). Checked boxes in §15 are implemented.
 
 ---
 
@@ -149,7 +149,7 @@ fiscl/
 │   ├── demo.py           # synthetic personal + business demo data
 │   ├── importers/        # core pipeline, csv_import (profiles), ofx, types
 │   └── sync/simplefin.py # read-only bank sync
-├── tests/                # 190 tests: importers, analysis, tax, MCP contract, stdio, guardrails, SimpleFIN
+├── tests/                # 557 tests: importers, analysis, tax, MCP contract, stdio, guardrails, SimpleFIN
 ├── examples/claude_desktop_config.json
 ├── PROJECT.md · README.md · SECURITY.md · LICENSE
 └── pyproject.toml
@@ -468,7 +468,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 
 ## 16. Testing
 
-- **190 pytest tests**, run with `uv run pytest`. They cover:
+- **557 pytest tests**, run with `uv run pytest`. They cover:
   - money parsing edge cases (parentheses, CR/DR, locales, banker's rounding)
   - redaction
   - merchant normalization (processor prefixes, store numbers, ACH codes, casing)
