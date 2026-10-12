@@ -56,6 +56,8 @@ async def test_tools_listed_with_annotations(demo):
         "record_1099",
         "reconcile_1099",
         "holdings",
+        "list_fx_rates",
+        "set_fx_rate",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
@@ -72,6 +74,7 @@ async def test_tools_listed_with_annotations(demo):
         "category_trend",
         "reconcile_1099",
         "holdings",
+        "list_fx_rates",
     ):
         assert tools[name].annotations.read_only_hint is True, name
     destructive_tools = (
@@ -85,6 +88,7 @@ async def test_tools_listed_with_annotations(demo):
         "manage_goal",
         "set_scope",
         "record_1099",
+        "set_fx_rate",
     )
     for name in destructive_tools:
         a = tools[name].annotations
@@ -235,6 +239,45 @@ async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, 
         assert any(a["name"] == "Truck" for a in nw["assets"])
         af = (await c.call_tool("afford", {"amount": 2000})).structured_content
         assert af["affordable"] == (af["with_purchase"]["lowest_balance"]["amount"]["minor"] >= af["buffer"]["minor"])
+
+
+async def test_fx_tools_dry_run_apply_and_errors_over_mcp(cfg, conn):
+    from fiscl.db import add_account
+    from fiscl.importers.core import import_statements
+    from fiscl.importers.types import ParsedStatement, ParsedTxn
+
+    add_account(conn, "Euro Cafe Account", "checking", currency="EUR")
+    stmt = ParsedStatement(format="csv", txns=[ParsedTxn("2026-10-03", -1000, "Cafe")], currency="EUR")
+    import_statements(conn, cfg, [stmt], "f.csv", "d", account_name="Euro Cafe Account", post_process=False)
+    conn.commit()
+    item = {"date": "2026-10-01", "currency": "EUR", "rate": "1.1"}
+    async with Client(build_server(cfg)) as c:
+        spend = await c.call_tool("query_transactions", {"start_date": "2026-10-01", "end_date": "2026-10-12"})
+        assert spend.structured_content["meta"]["unconverted"]["count"] == 1
+        r = await c.call_tool("set_fx_rate", {"items": [item]})
+        assert r.structured_content["dry_run"] is True and r.structured_content["transactions_affected"] == 1
+        assert (await c.call_tool("list_fx_rates", {})).structured_content["rates"] == []
+        r = await c.call_tool("set_fx_rate", {"items": [item], "dry_run": False})
+        assert r.structured_content["dry_run"] is False
+        listed = (await c.call_tool("list_fx_rates", {})).structured_content
+        assert listed["rates"] == [{"date": "2026-10-01", "currency": "EUR", "rate": "1.1", "source": "manual"}]
+        assert listed["gaps"] == []
+        q = await c.call_tool("query_transactions", {"start_date": "2026-10-01", "end_date": "2026-10-12"})
+        assert "unconverted" not in q.structured_content["meta"]
+        assert q.structured_content["transactions"][0]["amount_home"]["minor"] == -1100
+        # errors: tool error, fixed prose, no names or amounts echoed
+        for name, args in [
+            ("set_fx_rate", {"items": [{**item, "rate": "-1"}]}),
+            ("set_fx_rate", {"items": [{**item, "currency": "USD"}]}),
+            ("set_fx_rate", {"items": []}),
+            ("list_fx_rates", {"currency": "dollars"}),
+        ]:
+            r = await c.call_tool(name, args)
+            assert r.is_error, name
+            text = r.content[0].text
+            assert "Euro Cafe" not in text and "1000" not in text and "10.00" not in text
+    log = (cfg.logs / "audit.log").read_text()
+    assert "Euro Cafe" not in log
 
 
 async def test_output_is_redacted_and_audit_log_has_no_merchants(cfg, conn, accounts):

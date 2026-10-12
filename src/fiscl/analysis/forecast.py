@@ -34,7 +34,8 @@ def _card_payment_events(
         return []
     events = []
     for card in conn.execute(
-        f"SELECT id, name FROM accounts WHERE archived = 0 AND type = 'credit' {account_filter}"
+        f"SELECT id, name FROM accounts WHERE archived = 0 AND type = 'credit' AND currency = ? {account_filter}",
+        (currency,),
     ).fetchall():
         pays = conn.execute(
             f"""SELECT l.posted_date AS paid, c.posted_date AS card_date, -l.amount AS amt
@@ -204,11 +205,21 @@ def forecast_cash(
     horizon = today + timedelta(days=days)
     acct_filter = account_scope_sql(scope)
     liquid = conn.execute(
-        f"SELECT id, name FROM accounts WHERE archived = 0 AND type IN ({_marks(LIQUID_TYPES)}) {acct_filter}",
-        LIQUID_TYPES,
+        f"""SELECT id, name FROM accounts WHERE archived = 0 AND type IN ({_marks(LIQUID_TYPES)})
+            AND currency = ? {acct_filter}""",
+        [*LIQUID_TYPES, cfg.currency],
     ).fetchall()
     liquid_ids = [r["id"] for r in liquid]
     assumptions: list[str] = []
+    foreign = conn.execute(
+        f"""SELECT name FROM accounts WHERE archived = 0 AND type IN ({_marks(LIQUID_TYPES)})
+            AND currency != ? {acct_filter} ORDER BY name""",
+        [*LIQUID_TYPES, cfg.currency],
+    ).fetchall()
+    if foreign:
+        assumptions.append(
+            f"Accounts in other currencies are left out of the forecast: {', '.join(r['name'] for r in foreign)}."
+        )
 
     if starting_balance is not None:
         start_bal = money_arg(starting_balance, cfg, "starting_balance")

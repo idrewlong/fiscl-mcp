@@ -69,5 +69,11 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 
 ## 2026-10-12 — QIF and holdings import rules (Phase 4)
 - QIF imports never create accounts from file text; `!Account` names must match an existing account. Dotted `DD.MM.YYYY` dates are always day-first; slash dates default to month-first (`--qif-date` or `[import] qif_date_order` overrides). A file that looks like the other order fails without echoing values.
-- Holdings: quantities and prices are Decimal strings; values are minor units. Negative quantities (shorts) are allowed. Cost basis is summed only when every lot has one. Holdings accounts stay home-currency until FX lands. Broker account-number columns are ignored or cut to last 4 for routing, never stored.
+- Holdings: quantities and prices are Decimal strings; values are minor units. Negative quantities (shorts) are allowed. Cost basis is summed only when every lot has one. Holdings accounts stay home-currency until FX lands (superseded 2026-10-12: foreign holdings convert at the as-of rate; only different-decimal currencies are refused). Broker account-number columns are ignored or cut to last 4 for routing, never stored.
 - Built-in Fidelity/Schwab/Vanguard/crypto profiles wait for the owner's scrubbed header samples.
+
+## 2026-10-12 — Multi-currency semantics (Phase 4)
+- Home amounts are materialized (`amount_home`) using the latest rate on or before the transaction date, within `[fx] max_rate_age_days` (default 7, range 1–31). Banker's rounding per row. Split parts get the remainder on the largest part so they sum exactly. With no rate the row stays unconverted: excluded from totals and counted in `meta.unconverted`.
+- Rates come only from `set_fx_rate` or `fiscl fx import`; there is never a network lookup. SQL triggers keep home-currency rows at `amount_home = amount` for every writer.
+- Balances, transfer matching, dedupe and rule amount conditions stay in native currency. Transfers between accounts in different currencies won't auto-match (known limitation).
+- Changing `config.currency` needs `fiscl fx refresh`; tools and `doctor` warn until then.

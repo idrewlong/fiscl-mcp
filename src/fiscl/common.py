@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import date
 from typing import Any
 
+from . import fx
 from .config import Config
 from .db import SCOPE_SQL
 from .guard import GuardError, choice, clean_text
@@ -42,6 +43,10 @@ def meta(conn, cfg: Config, start: date | None = None, end: date | None = None, 
     out: dict[str, Any] = {"currency": cfg.currency, "data_freshness": data_freshness(conn)}
     if start and end:
         out["period"] = {"from": start.isoformat(), "to": end.isoformat()}
+        if (unconverted := fx.unconverted_in_period(conn, cfg, start, end)) is not None:
+            out["unconverted"] = unconverted
+    if (notice := fx.home_currency_notice(conn, cfg)) is not None:
+        out["fx_notice"] = notice
     out.update(extra)
     return out
 
@@ -49,12 +54,12 @@ def meta(conn, cfg: Config, start: date | None = None, end: date | None = None, 
 # --- arguments ---------------------------------------------------------------------------
 
 
-def money_arg(value, cfg: Config, field: str) -> int | None:
-    """Dollars from a tool argument → minor units, or None."""
+def money_arg(value, cfg: Config, field: str, currency: str | None = None) -> int | None:
+    """Dollars from a tool argument → minor units (of `currency`, default the home currency), or None."""
     if value is None:
         return None
     try:
-        return to_minor(value, cfg.currency)
+        return to_minor(value, currency or cfg.currency)
     except AmountError as exc:
         raise GuardError(f"{field}: {exc}") from exc
 

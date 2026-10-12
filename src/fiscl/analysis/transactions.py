@@ -13,8 +13,8 @@ from ..money import amount
 _SORTS = {
     "date_desc": "t.posted_date DESC, t.id DESC",
     "date_asc": "t.posted_date ASC, t.id ASC",
-    "amount_asc": "t.amount ASC",
-    "amount_desc": "t.amount DESC",
+    "amount_asc": "t.amount_home ASC",
+    "amount_desc": "t.amount_home DESC",
 }
 
 
@@ -60,10 +60,10 @@ def query_transactions(
         where.append("t.merchant = ? COLLATE NOCASE")
         params.append(clean_text(merchant))
     if (lo := money_arg(min_amount, cfg, "min_amount")) is not None:
-        where.append("t.amount >= ?")
+        where.append("t.amount_home >= ?")  # min/max are in the home currency
         params.append(lo)
     if (hi := money_arg(max_amount, cfg, "max_amount")) is not None:
-        where.append("t.amount <= ?")
+        where.append("t.amount_home <= ?")
         params.append(hi)
     if text:
         needle = f"%{like_escape(clean_text(text, 100))}%"
@@ -75,18 +75,19 @@ def query_transactions(
         params += s_params
     base = f"FROM {TXN_BASE_FROM} WHERE {' AND '.join(where)}"
     totals = conn.execute(
-        f"""SELECT COUNT(*) AS n, COALESCE(SUM(t.amount), 0) AS net,
-                   COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0) AS outflow,
-                   COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount END), 0) AS inflow {base}""",
+        f"""SELECT COUNT(*) AS n, COALESCE(SUM(t.amount_home), 0) AS net,
+                   COALESCE(SUM(CASE WHEN t.amount_home < 0 THEN t.amount_home END), 0) AS outflow,
+                   COALESCE(SUM(CASE WHEN t.amount_home > 0 THEN t.amount_home END), 0) AS inflow {base}""",
         params,
     ).fetchone()
     rows = conn.execute(
         f"""SELECT t.id, t.posted_date, a.name AS account, t.merchant, t.raw_description, t.memo,
-                   c.name AS category, t.amount, t.currency, t.is_pending, t.transfer_group, t.note
+                   c.name AS category, t.amount, t.amount_home, t.currency, t.is_pending, t.transfer_group, t.note
             {base} ORDER BY {sort_sql} LIMIT ?""",
         [*params, limit],
     ).fetchall()
     ids = [r["id"] for r in rows]
+    currency_of = {r["id"]: r["currency"] for r in rows}
     tags_by: dict[int, list[str]] = {}
     splits_by: dict[int, list[dict]] = {}
     if ids:
@@ -102,7 +103,7 @@ def query_transactions(
             ids,
         ):
             part = {
-                "amount": amount(sr["amount"], cfg.currency),
+                "amount": amount(sr["amount"], currency_of[sr["transaction_id"]]),
                 "category": sr["category"] or "Uncategorized",
                 "scope": sr["scope"],
             }
@@ -121,6 +122,8 @@ def query_transactions(
             "pending": bool(r["is_pending"]),
             "is_transfer": r["transfer_group"] is not None,
         }
+        if r["currency"] != cfg.currency:  # home-currency rows stay exactly as before
+            item["amount_home"] = amount(r["amount_home"], cfg.currency) if r["amount_home"] is not None else None
         if not cfg.guard.redact_descriptions:
             item["description"] = r["raw_description"]
             if r["memo"]:
@@ -205,12 +208,12 @@ def list_uncategorized(conn, cfg: Config, from_=None, to=None, limit=None, today
     start, end = date_range(from_, to, default_days=365, today=today)
     limit = clamp_limit(limit, cfg)
     rows = conn.execute(
-        """SELECT t.merchant, COUNT(*) AS n, SUM(t.amount) AS total, MIN(t.posted_date) AS first,
+        """SELECT t.merchant, COUNT(*) AS n, SUM(t.amount_home) AS total, MIN(t.posted_date) AS first,
                   MAX(t.posted_date) AS last, GROUP_CONCAT(DISTINCT a.name) AS accounts
            FROM transactions t JOIN accounts a ON a.id = t.account_id
            WHERE t.category_id IS NULL AND t.transfer_group IS NULL AND t.posted_date BETWEEN ? AND ?
              AND NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)
-           GROUP BY t.merchant ORDER BY ABS(SUM(t.amount)) DESC""",
+           GROUP BY t.merchant ORDER BY ABS(SUM(t.amount_home)) DESC""",
         (start.isoformat(), end.isoformat()),
     ).fetchall()
     cats = [r[0] for r in conn.execute("SELECT name FROM categories WHERE kind != 'transfer' ORDER BY name")]

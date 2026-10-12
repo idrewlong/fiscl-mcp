@@ -122,6 +122,9 @@ async def run(home: Path) -> Smoke:
             # no holdings in the demo: empty states, never a network call
             ("holdings", {}),
             ("holdings", {"group_by": "asset_class", "limit": 5}),
+            # no rates in the demo: empty state, never a rate lookup
+            ("list_fx_rates", {}),
+            ("list_fx_rates", {"currency": "EUR", "start_date": START, "limit": 5}),
             ("afford", {"amount": 500}),
             ("afford", {"amount": 25, "recurring_monthly": True, "buffer": 100}),
             ("debt_payoff", {"extra_monthly": 50, "debts": debts}),
@@ -165,6 +168,7 @@ async def run(home: Path) -> Smoke:
             ("set_budget", {"items": [{"category": "Groceries", "monthly": 500}]}),
             ("manage_asset", {"action": "add", "name": "Smoke boat", "kind": "other", "value": 1000}),
             ("manage_goal", {"action": "add", "name": "Smoke goal", "target": 500}),
+            ("set_fx_rate", {"items": [{"date": "2026-01-02", "currency": "EUR", "rate": "1.0850"}]}),
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business"}]}),
             ("log_trip", {"trip_date": "2026-01-02", "miles": 10, "purpose": "Smoke test client visit"}),
             ("export_schedule_c", {"include_transactions": True}),
@@ -193,6 +197,10 @@ async def run(home: Path) -> Smoke:
             ("category_trend", {"category": "No such category"}),
             ("holdings", {"group_by": "zodiac"}),
             ("holdings", {"account": "No such account"}),
+            ("list_fx_rates", {"currency": "dollars"}),
+            ("set_fx_rate", {"items": [{"date": "2026-01-02", "currency": "EUR", "rate": "0"}]}),
+            ("set_fx_rate", {"items": [{"date": "2026-01-02", "currency": "USD", "rate": "1"}]}),
+            ("set_fx_rate", {"items": [{"date": "2026-01-02", "currency": "EUR", "rate": None}]}),
             ("show_chart", {"kind": "pie"}),
             ("show_chart", {"kind": "category_trend"}),
             ("split_transaction", {"transaction_id": tid, "parts": [{"amount": "-1.00", "category": "A"}] * 2}),

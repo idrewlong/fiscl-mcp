@@ -14,6 +14,7 @@ from decimal import Decimal, localcontext
 
 from ..common import account_id, meta
 from ..config import Config
+from ..fx import RateBook
 from ..guard import GuardError, choice, clamp_limit, parse_date
 from ..money import amount, pct
 
@@ -21,21 +22,32 @@ STALE_DAYS = 7
 GROUP_BY = ("position", "asset_class", "account")
 
 
-def snapshot_value(conn: sqlite3.Connection, acct: int, on: date) -> tuple[str, int, int] | None:
-    """(as_of, total market value in minor units, positions without a value) of one account's latest snapshot at or
-    before `on`, or None when it has none. Used by net_worth so a brokerage is valued from its positions."""
+def snapshot_value(
+    conn: sqlite3.Connection, acct: int, on: date, rates: RateBook | None = None
+) -> tuple[str, int, int, int] | None:
+    """(as_of, total market value in home minor units, positions without a value, valued positions in a currency with
+    no usable rate) of one account's latest snapshot at or before `on`, or None when it has none. Used by net_worth so
+    a brokerage is valued from its positions. Foreign-currency values convert at the rate in force on `on`."""
     snap = conn.execute(
         "SELECT id, as_of FROM holdings_snapshots WHERE account_id = ? AND as_of <= ? ORDER BY as_of DESC LIMIT 1",
         (acct, on.isoformat()),
     ).fetchone()
     if snap is None:
         return None
-    total, unvalued = conn.execute(
-        "SELECT COALESCE(SUM(market_value), 0), COALESCE(SUM(market_value IS NULL), 0) FROM holdings "
-        "WHERE snapshot_id = ?",
+    total = unvalued = unconverted = 0
+    for g in conn.execute(
+        "SELECT currency, COALESCE(SUM(market_value), 0) AS v, COALESCE(SUM(market_value IS NULL), 0) AS nv, "
+        "COUNT(market_value) AS valued FROM holdings WHERE snapshot_id = ? GROUP BY currency",
         (snap["id"],),
-    ).fetchone()
-    return snap["as_of"], int(total), int(unvalued)
+    ):
+        unvalued += int(g["nv"])
+        if rates is None or g["currency"] == rates.home:
+            total += int(g["v"])
+        elif (converted := rates.convert(int(g["v"]), g["currency"], on.isoformat())) is None:
+            unconverted += int(g["valued"])
+        else:
+            total += converted
+    return snap["as_of"], total, unvalued, unconverted
 
 
 @dataclass
@@ -49,6 +61,8 @@ class _Position:
     value: int | None = None
     basis: int | None = None
     basis_missing: bool = False
+    currency: str = ""
+    unconverted: bool = False  # a lot is in a currency with no usable rate: value and basis are left out
 
     @property
     def gain(self) -> int | None:
@@ -59,7 +73,7 @@ def _add(total: int | None, part: int | None) -> int | None:
     return total if part is None else (part if total is None else total + part)
 
 
-def _positions(conn: sqlite3.Connection, snaps: list[sqlite3.Row]) -> list[_Position]:
+def _positions(conn: sqlite3.Connection, snaps: list[sqlite3.Row], rates: RateBook, on: date) -> list[_Position]:
     if not snaps:
         return []
     names = {s["id"]: s["account"] for s in snaps}
@@ -71,33 +85,46 @@ def _positions(conn: sqlite3.Connection, snaps: list[sqlite3.Row]) -> list[_Posi
         for r in rows:
             account = names[r["snapshot_id"]]
             pos = merged.setdefault(
-                (account, r["symbol"]), _Position(account, r["symbol"], r["name"], r["asset_class"])
+                (account, r["symbol"]),
+                _Position(account, r["symbol"], r["name"], r["asset_class"], currency=r["currency"]),
             )
             if pos.name is None:
                 pos.name = r["name"]
             pos.quantity += Decimal(r["quantity"])
             if r["price"] is not None:
                 pos.prices.add(r["price"])
-            pos.value = _add(pos.value, r["market_value"])
-            if r["cost_basis"] is None:
+            value, basis = r["market_value"], r["cost_basis"]
+            if r["currency"] != rates.home:  # each lot converts on its own, so rounding is per row
+                raw = (value, basis)
+                value, basis = (None if m is None else rates.convert(m, r["currency"], on.isoformat()) for m in raw)
+                if any(m is not None and c is None for m, c in zip(raw, (value, basis), strict=True)):
+                    pos.unconverted = True
+                    continue
+            pos.value = _add(pos.value, value)
+            if basis is None:
                 pos.basis_missing = True
             else:
-                pos.basis = _add(pos.basis, r["cost_basis"])
+                pos.basis = _add(pos.basis, basis)
     for pos in merged.values():
-        if pos.basis_missing:
+        if pos.unconverted:
+            pos.value = pos.basis = None
+        elif pos.basis_missing:
             pos.basis = None  # a partial basis would understate cost and overstate gain
     return list(merged.values())
 
 
 def _totals(positions: list[_Position], cur: str) -> dict:
     value = sum(p.value for p in positions if p.value is not None)
-    return {
+    out = {
         "market_value": amount(value, cur),
         "cost_basis_known": amount(sum(p.basis for p in positions if p.basis is not None), cur),
         "unrealized_gain_known": amount(sum(g for p in positions if (g := p.gain) is not None), cur),
-        "positions_without_basis": sum(1 for p in positions if p.basis is None),
-        "positions_without_value": sum(1 for p in positions if p.value is None),
+        "positions_without_basis": sum(1 for p in positions if p.basis is None and not p.unconverted),
+        "positions_without_value": sum(1 for p in positions if p.value is None and not p.unconverted),
     }
+    if unconverted := sum(1 for p in positions if p.unconverted):
+        out["unconverted_positions"] = unconverted
+    return out
 
 
 def _canonical(d: Decimal) -> str:
@@ -110,7 +137,7 @@ def _share(value: int | None, total: int) -> str | None:
 
 def _position_dict(p: _Position, total_value: int, cur: str) -> dict:
     gain = p.gain
-    return {
+    out = {
         "account": p.account,
         "symbol": p.symbol,
         "name": p.name,
@@ -123,6 +150,9 @@ def _position_dict(p: _Position, total_value: int, cur: str) -> dict:
         "unrealized_pct": pct(gain, p.basis) if gain is not None and p.basis and p.basis > 0 else None,
         "share_pct": _share(p.value, total_value),
     }
+    if p.currency and p.currency != cur:  # converted at the rate in force on the as-of date; absent for home currency
+        out["original_currency"] = p.currency
+    return out
 
 
 def _group_dict(label: dict, members: list[_Position], total_value: int, cur: str) -> dict:
@@ -170,7 +200,7 @@ def holdings(
     ]
 
     cur = cfg.currency
-    positions = _positions(conn, snaps)
+    positions = _positions(conn, snaps, RateBook(conn, cfg), on)
     positions.sort(key=lambda p: (p.value is None, -(p.value or 0), p.account, p.symbol))
     totals = _totals(positions, cur)
     total_value = totals["market_value"]["minor"]
@@ -209,6 +239,13 @@ def holdings(
         )
     if totals["positions_without_value"]:
         notes.append("Some positions have no price or value in the import and are left out of the totals.")
+    if totals.get("unconverted_positions"):
+        notes.append(
+            f"Some positions are in another currency with no exchange rate within {cfg.fx_max_rate_age_days} days "
+            "of the as-of date and are left out of the totals. Add rates with set_fx_rate."
+        )
+    if any(p.currency and p.currency != cur and not p.unconverted for p in positions):
+        notes.append("Positions in other currencies are converted at the rate in force on the as-of date.")
     notes.append("This reports what your imports say; it is not investment advice.")
     out["notes"] = notes
     out["meta"] = meta(

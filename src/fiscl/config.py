@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from .money import AmountError, to_minor
+from .money import AmountError, exponent, to_minor
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -85,6 +85,7 @@ class Config:
     teller_environment: str = "development"  # [connectors.teller] environment
     plaid_environment: str = "sandbox"  # [connectors.plaid] environment
     qif_date_order: str = "mdy"  # [import] qif_date_order: how to read ambiguous QIF dates (mdy | dmy)
+    fx_max_rate_age_days: int = 7  # [fx] max_rate_age_days: how stale a rate may be for a transaction's date (1-31)
 
     @property
     def db_path(self) -> Path:
@@ -152,6 +153,11 @@ audit_log = true
 # How to read ambiguous QIF dates such as 01/02/2026: "mdy" (US, default) or "dmy". Override per file with
 # `fiscl import file.qif --qif-date dmy`.
 qif_date_order = "mdy"
+
+[fx]
+# Exchange rates come only from you (`set_fx_rate`, `fiscl fx import`); fiscl never looks them up. A transaction in
+# another currency uses the latest rate dated on or before it, if that rate is at most this many days older.
+max_rate_age_days = 7
 
 [transfers]
 window_days = 3
@@ -405,6 +411,7 @@ def load_config(home: Path | None = None) -> Config:
     return Config(
         home=home,
         qif_date_order=qif_date_order,
+        fx_max_rate_age_days=_int(raw.get("fx", {}) or {}, "max_rate_age_days", 7, 1, 31, "fx"),
         tax=tax,
         teller_environment=teller_env,
         plaid_environment=plaid_env,
@@ -501,7 +508,7 @@ def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") 
         kept.append(line)
     while kept and not kept[-1].strip():
         kept.pop()
-    scale = 1 if cfg.currency in ("JPY", "KRW") else 100
+    scale = 10 ** exponent(cfg.currency)
     out = "\n".join(kept)
     out += "\n\n" if out else ""
     out += f"# updated by {tool} at {datetime.now().isoformat(timespec='seconds')}\n"

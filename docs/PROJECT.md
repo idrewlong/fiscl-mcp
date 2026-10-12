@@ -440,7 +440,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [ ] Amazon order-history splitting
 - [x] Holdings import (generic profile; Fidelity/Schwab/Vanguard/crypto built-ins pending owner header samples)
 - [x] QIF
-- [ ] Multi-currency with FX snapshots
+- [x] Multi-currency with FX snapshots (manual/CSV rates only; 7-day rule)
 
 **Planning**
 - [x] `net_worth` with manual assets

@@ -384,9 +384,24 @@ def cmd_backup(cfg, args) -> int:
     return 0
 
 
+def cmd_fx(cfg, args) -> int:
+    from . import fx
+
+    with open_db(cfg) as conn:
+        if args.action == "import":
+            _print(fx.import_rates_csv(conn, cfg, Path(args.file).expanduser(), apply=args.apply))
+            if not args.apply:
+                print("Dry run: nothing was saved. Run again with --apply to save the rates.", file=sys.stderr)
+        else:
+            changed = fx.refresh_home_amounts(conn, cfg)
+            _print({"home_currency": cfg.currency, "transactions_changed": len(changed)})
+    return 0
+
+
 def cmd_doctor(cfg, args) -> int:
     from .analysis import data_freshness
     from .categorize import inactive_rule_businesses, load_rules
+    from .fx import home_currency_notice
 
     problems, fixed = [], []
     warnings = [w for w in (cloud_sync_warning(cfg.home), disk_encryption_warning()) if w]
@@ -423,6 +438,8 @@ def cmd_doctor(cfg, args) -> int:
         freshness = data_freshness(conn)
         failed = conn.execute("SELECT COUNT(*) FROM imports WHERE status = 'failed'").fetchone()[0]
         key_state = key_status(conn, cfg)
+        if (fx_notice := home_currency_notice(conn, cfg)) is not None:
+            warnings.append(fx_notice)
     if key_state == "mismatch":
         warnings.append(
             "The install key on this machine is not the one this database's account hashes were made with "
@@ -640,6 +657,16 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("path")
     x.add_argument("--force", action="store_true", help="replace a different key even if accounts use the current one")
     s.set_defaults(fn=cmd_key)
+
+    s = sub.add_parser("fx", help="exchange rates for accounts in other currencies (you supply them; no lookups)")
+    a = s.add_subparsers(dest="action", required=True)
+    x = a.add_parser("import", help="load rates from a CSV with columns date,currency,rate")
+    x.add_argument("file")
+    x.add_argument("--apply", action="store_true", help="save the rates (default is a dry run)")
+    a.add_parser(
+        "refresh", help="recompute every home-currency amount, e.g. after changing the currency in config.toml"
+    )
+    s.set_defaults(fn=cmd_fx)
 
     sub.add_parser("backup", help="snapshot the database").set_defaults(fn=cmd_backup)
     sub.add_parser("doctor", help="check config, permissions, and data").set_defaults(fn=cmd_doctor)

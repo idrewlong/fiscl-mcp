@@ -99,10 +99,10 @@ def find_anomalies(conn, cfg: Config, from_=None, to=None, sensitivity="normal",
     skip = _active_recurring_out(conn)
 
     rows = conn.execute(
-        f"""SELECT t.id, t.account_id, t.posted_date, -t.amount AS spent, t.merchant, t.raw_description,
+        f"""SELECT t.id, t.account_id, t.posted_date, -t.amount_home AS spent, t.merchant, t.raw_description,
                    c.name AS category
             FROM {TXN_BASE_FROM}
-            WHERE t.posted_date BETWEEN ? AND ? AND {SPENDING_FILTER} AND t.amount < 0
+            WHERE t.posted_date BETWEEN ? AND ? AND {SPENDING_FILTER} AND t.amount_home < 0
             ORDER BY t.posted_date, t.id""",
         [(start - timedelta(days=HISTORY_DAYS)).isoformat(), end.isoformat()],
     ).fetchall()
@@ -334,9 +334,9 @@ def subscription_watchdog(conn, cfg: Config, today=None) -> dict:
     # (a repeat, or a detected recurring item).
     since = (today - timedelta(days=HISTORY_DAYS)).isoformat()
     rows = conn.execute(
-        f"""SELECT t.id, t.posted_date, -t.amount AS spent, t.merchant
+        f"""SELECT t.id, t.posted_date, -t.amount_home AS spent, t.merchant
             FROM {TXN_BASE_FROM}
-            WHERE t.merchant IS NOT NULL AND t.transfer_group IS NULL AND t.amount <= 0
+            WHERE t.merchant IS NOT NULL AND t.transfer_group IS NULL AND t.amount_home <= 0
               AND COALESCE(c.kind, 'expense') NOT IN ('transfer', 'ignore', 'income')
             ORDER BY t.posted_date, t.id"""
     ).fetchall()
@@ -490,8 +490,9 @@ def refund_tracker(conn, cfg: Config, days=90, today=None) -> dict:
         raise GuardError("days must be an integer between 1 and 365")
     cur = cfg.currency
     start = today - timedelta(days=days - 1)
-    base = f"""SELECT t.id, t.posted_date, t.amount, t.merchant, c.name AS category, c.kind AS kind
+    base = f"""SELECT t.id, t.posted_date, t.amount_home AS amount, t.merchant, c.name AS category, c.kind AS kind
             FROM {TXN_BASE_FROM} WHERE t.transfer_group IS NULL AND t.merchant IS NOT NULL
+              AND t.amount_home IS NOT NULL
               AND COALESCE(c.kind, 'expense') NOT IN ('transfer', 'ignore') """
     purchases_by: dict[str, list] = defaultdict(list)
     credits_by: dict[str, list] = defaultdict(list)
@@ -542,17 +543,17 @@ def refund_tracker(conn, cfg: Config, days=90, today=None) -> dict:
         )
 
     tagged = conn.execute(
-        f"""SELECT t.id, t.posted_date, -t.amount AS spent, t.merchant, c.name AS category
+        f"""SELECT t.id, t.posted_date, -t.amount_home AS spent, t.merchant, c.name AS category
             FROM {TXN_BASE_FROM} JOIN tags g ON g.transaction_id = t.id
-            WHERE g.tag = ? AND t.amount < 0 ORDER BY t.posted_date, t.id""",
+            WHERE g.tag = ? AND t.amount_home < 0 ORDER BY t.posted_date, t.id""",
         (REFUND_TAG,),
     ).fetchall()
     merchants = sorted({r["merchant"].lower() for r in tagged if r["merchant"]})
     credits: dict[str, list] = defaultdict(list)
     if merchants:
         for r in conn.execute(
-            f"""SELECT t.posted_date, t.amount, LOWER(t.merchant) AS m FROM transactions t
-                WHERE t.amount > 0 AND t.transfer_group IS NULL
+            f"""SELECT t.posted_date, t.amount_home AS amount, LOWER(t.merchant) AS m FROM transactions t
+                WHERE t.amount_home > 0 AND t.transfer_group IS NULL
                   AND LOWER(t.merchant) IN ({",".join("?" * len(merchants))})""",
             merchants,
         ):

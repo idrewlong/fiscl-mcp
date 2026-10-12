@@ -12,6 +12,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from ..common import account_id, check_items, find_account, meta, money_arg, plan_result, with_meta
 from ..config import Config
+from ..fx import RateBook
 from ..guard import GuardError, choice, clean_text, parse_date
 from ..money import amount, pct
 from ..recurring import add_months
@@ -174,19 +175,28 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
     """Assets minus liabilities: account balances rolled to the date, plus manual assets and liabilities."""
     today = today or date.today()
     on = _past_date(as_of, "as_of", today)
-    accounts = conn.execute("SELECT id, name, type, scope FROM accounts WHERE archived = 0 ORDER BY name").fetchall()
+    accounts = conn.execute(
+        "SELECT id, name, type, scope, currency FROM accounts WHERE archived = 0 ORDER BY name"
+    ).fetchall()
     assets: list[dict] = []
     liabilities: list[dict] = []
     stale, missing = [], []
+    no_rate: list[dict] = []
     balances: dict[int, int] = {}
     from_holdings: list[dict] = []
     unvalued_positions = 0
+    rates = RateBook(conn, cfg)
     for a in accounts:
         rolled = rolled_balance(conn, a["id"], on)
-        held = snapshot_value(conn, a["id"], on)
+        held = snapshot_value(conn, a["id"], on, rates)
+        original = None
         if held is not None and (rolled is None or held[0] >= rolled[1]):
             # A positions import at least as new as the latest balance values the account. One source, never both.
-            last, minor, unvalued = held
+            last, minor, unvalued, unconverted = held
+            if unconverted:
+                missing.append(a["name"])
+                no_rate.append({"account": a["name"], "currency": a["currency"], "reason": "no_fx_rate"})
+                continue
             unvalued_positions += unvalued
             from_holdings.append({"account": a["name"], "as_of": last})
             source = "holdings"
@@ -195,12 +205,21 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
             continue
         else:
             minor, snapshot = rolled
+            if a["currency"] != cfg.currency:
+                original = minor
+                minor = rates.convert(minor, a["currency"], on.isoformat())
+                if minor is None:
+                    missing.append(a["name"])
+                    no_rate.append({"account": a["name"], "currency": a["currency"], "reason": "no_fx_rate"})
+                    continue
             balances[a["id"]] = minor
             last = _last_data_day(conn, a["id"], snapshot, on)
             source = "account"
         if (on - date.fromisoformat(last)).days > STALE_DAYS:
             stale.append({"account": a["name"], "data_through": last})
         row = {"name": a["name"], "type": a["type"], "source": source, "as_of": last}
+        if original is not None:
+            row["original_amount"] = amount(abs(original), a["currency"])
         # Signed as the bank reports it: a negative card or loan balance is money owed.
         if minor >= 0:
             assets.append({**row, "amount": amount(minor, cfg.currency)})
@@ -227,11 +246,14 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
                 continue
             first = _first_data_day(conn, a["id"])
             then = rolled_balance(conn, a["id"], then_day) if first and first <= then_day.isoformat() else None
-            if then is None:
+            then_minor = then[0] if then is not None else None
+            if then_minor is not None and a["currency"] != cfg.currency:
+                then_minor = rates.convert(then_minor, a["currency"], then_day.isoformat())
+            if then_minor is None:
                 skipped += 1
                 continue
             now_sum += balances[a["id"]]
-            then_sum += then[0]
+            then_sum += then_minor
             used += 1
         if used:
             change_vs.append(
@@ -286,6 +308,13 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
     }
     if from_holdings:  # absent otherwise, so output without holdings is unchanged
         result["valued_from_holdings"] = from_holdings
+    if no_rate:
+        result["unconverted_balances"] = no_rate
+        result["assumptions"].append(
+            "Accounts in other currencies with no exchange rate within "
+            f"{cfg.fx_max_rate_age_days} days of the date are left out of the totals (see unconverted_balances). "
+            "Add rates with set_fx_rate."
+        )
     return result
 
 

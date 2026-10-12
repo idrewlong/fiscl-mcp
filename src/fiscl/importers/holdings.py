@@ -19,7 +19,7 @@ from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from ..config import Config
 from ..db import add_account, find_account
 from ..guard import clean_text, safe_regex
-from ..money import AmountError, parse_amount, to_minor
+from ..money import AmountError, exponent, parse_amount, to_minor
 from .csv_import import (
     CSVImportError,
     Profile,
@@ -317,9 +317,14 @@ def import_holdings(
         import_id = int(cur.lastrowid)
         targets = _route(conn, cfg, profile, parsed.positions, account_name)
         for account, positions in targets:
-            if account["currency"].upper() != cfg.currency:
-                raise CSVImportError("holdings can only be imported into accounts in your home currency")
-            if store_snapshot(conn, account["id"], parsed.as_of, import_id, cfg.currency, positions):
+            acct_currency = account["currency"].upper()
+            if exponent(acct_currency) != exponent(cfg.currency):
+                # Values were parsed with the home currency's decimal places; another exponent would misread them.
+                raise CSVImportError(
+                    "holdings can't be imported into an account whose currency has a different number of "
+                    "decimal places than your home currency"
+                )
+            if store_snapshot(conn, account["id"], parsed.as_of, import_id, acct_currency, positions):
                 result.snapshots_replaced += 1
             result.accounts.append(account["name"])
         unvalued = sum(1 for p in parsed.positions if p.market_value is None)

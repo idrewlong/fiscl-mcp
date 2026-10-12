@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .. import fx
 from ..config import Config, load_rules_raw
 from ..db import add_account, find_account
 from ..guard import clean_text
@@ -197,7 +198,7 @@ def _carry_edits(conn: sqlite3.Connection, pend: sqlite3.Row, new_id: int, amoun
     return carried, dropped
 
 
-def _update_in_place(conn: sqlite3.Connection, account_id: int, t, merchant: str) -> int | None:
+def _update_in_place(conn: sqlite3.Connection, cfg: Config, account_id: int, t, merchant: str) -> int | None:
     """Apply a provider-reported change to a row we already hold (matched by fitid). The user's category, note,
     tags, and scope stay; a split that no longer sums to the new amount is dropped rather than kept invalid.
     Returns None when the row isn't there yet (the caller inserts it), else 1 if a split was dropped, else 0."""
@@ -215,13 +216,15 @@ def _update_in_place(conn: sqlite3.Connection, account_id: int, t, merchant: str
              memo = ?, is_pending = ?, dedupe_key = COALESCE(?, dedupe_key) WHERE id = ?""",
         (t.posted_date, t.amount, t.description, merchant, t.memo, int(t.pending), key, row["id"]),
     )
+    fx.refresh_home_amounts(conn, cfg, ids=[row["id"]])  # new date or amount can change the rate in force
     return dropped
 
 
 def _insert_statement(
-    conn: sqlite3.Connection, stmt: ParsedStatement, account: sqlite3.Row, import_id: int, aliases
+    conn: sqlite3.Connection, cfg: Config, stmt: ParsedStatement, account: sqlite3.Row, import_id: int, aliases
 ) -> tuple[int, int, int, int, int]:
     added = skipped = replaced = carried = dropped = 0
+    rates = fx.RateBook(conn, cfg)
     occurrences: dict[tuple, int] = {}
     for t in stmt.txns:
         merchant = normalize_merchant(t.description, aliases)
@@ -237,7 +240,7 @@ def _insert_statement(
             ident = (t.posted_date, t.amount, t.description.lower(), t.pending)
             occurrences[ident] = occurrences.get(ident, 0) + 1
             key = ("p:" if t.pending else "") + _dedupe_key(t.posted_date, t.amount, t.description, occurrences[ident])
-        if t.modified and t.fitid and (updated := _update_in_place(conn, account["id"], t, merchant)) is not None:
+        if t.modified and t.fitid and (updated := _update_in_place(conn, cfg, account["id"], t, merchant)) is not None:
             skipped += 1
             dropped += updated
             continue
@@ -261,8 +264,8 @@ def _insert_statement(
         cur = conn.execute(
             """INSERT OR IGNORE INTO transactions
                (account_id, posted_date, amount, currency, raw_description, merchant, memo,
-                is_pending, fitid, dedupe_key, import_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                is_pending, fitid, dedupe_key, import_id, amount_home)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 account["id"],
                 t.posted_date,
@@ -275,12 +278,14 @@ def _insert_statement(
                 t.fitid,
                 key,
                 import_id,
+                rates.convert(t.amount, stmt.currency, t.posted_date),
             ),
         )
         if cur.rowcount:
             added += 1
             if pend:
                 c, d = _carry_edits(conn, pend, int(cur.lastrowid), t.amount)
+                fx.refresh_home_amounts(conn, cfg, ids=[int(cur.lastrowid)])  # carried split parts follow the new row
                 carried += c
                 dropped += d
                 conn.execute("DELETE FROM transactions WHERE id = ?", (pend["id"],))
@@ -369,7 +374,7 @@ def import_statements(
             account = _resolve_account(conn, cfg, stmt, account_name)
             account_id = account["id"]
             result.accounts.append(account["name"])
-            added, skipped, replaced, carried, dropped = _insert_statement(conn, stmt, account, import_id, aliases)
+            added, skipped, replaced, carried, dropped = _insert_statement(conn, cfg, stmt, account, import_id, aliases)
             result.rows_seen += len(stmt.txns)
             result.rows_added += added
             result.rows_skipped += skipped

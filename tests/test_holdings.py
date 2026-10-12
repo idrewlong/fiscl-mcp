@@ -158,13 +158,20 @@ def test_dry_run_changes_nothing_even_a_new_account(conn, cfg, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0] == 0
 
 
-def test_existing_account_is_reused_and_must_be_home_currency(conn, cfg, tmp_path):
+def test_existing_account_is_reused_and_foreign_accounts_store_their_own_currency(conn, cfg, tmp_path):
     add_account(conn, "Brokerage", "brokerage")
     snap(conn, cfg, tmp_path)
     assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
     add_account(conn, "Euro", "brokerage", currency="EUR")
     r = put(conn, cfg, tmp_path, CSV + "\n", name="e.csv", account_name="Euro", as_of="2026-10-01")
-    assert r.status == "failed" and "home currency" in r.error
+    assert r.status == "ok"
+    assert {row[0] for row in conn.execute("SELECT DISTINCT currency FROM holdings WHERE snapshot_id = 2")} == {"EUR"}
+
+
+def test_account_whose_currency_has_other_decimal_places_is_refused(conn, cfg, tmp_path):
+    add_account(conn, "Yen", "brokerage", currency="JPY")
+    r = put(conn, cfg, tmp_path, CSV, name="y.csv", account_name="Yen", as_of="2026-10-01")
+    assert r.status == "failed" and "decimal places" in r.error
 
 
 def test_transactions_csv_is_not_taken_for_holdings(conn, cfg, accounts, tmp_path):

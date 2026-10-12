@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..config import FILE_MODE, Config, toml_string
 from ..guard import GuardError, clean_text, safe_regex
-from ..money import AmountError, parse_amount
+from ..money import AmountError, is_currency_code, parse_amount
 from .types import ParsedStatement, ParsedTxn
 
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y", "%Y/%m/%d", "%b %d, %Y", "%d %b %Y")
@@ -43,6 +43,7 @@ class Profile:
     amount_sign: str = "as_is"  # as_is | invert
     skip_rows: int = 0
     account: str | None = None
+    currency: str | None = None  # the statement's currency (3-letter code); default is the home currency
     # File layout, for exports with a preamble or footer: find the header row by `match_headers` instead of counting
     # `skip_rows`, and stop at the first blank line (a footer or a second section follows it).
     find_header: bool = False
@@ -74,6 +75,10 @@ class Profile:
             raise CSVImportError(f"profile {source}: has an unknown field or is missing a required one") from exc
         if p.kind not in KINDS:
             raise CSVImportError(f"profile {source}: kind must be transactions or holdings")
+        if p.currency is not None:
+            p.currency = p.currency.strip().upper() if isinstance(p.currency, str) else ""
+            if not is_currency_code(p.currency):
+                raise CSVImportError(f"profile {source}: currency must be a 3-letter code like EUR")
         if p.kind == "holdings":
             p._validate_holdings(source)
         else:
@@ -279,17 +284,18 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
     if profile.kind == "holdings":
         raise CSVImportError("that profile is for holdings files, which are imported as a snapshot, not transactions")
     _, rows = read_profile_rows(text, profile)
+    currency = profile.currency or cfg.currency
     txns: list[ParsedTxn] = []
     balances: list[tuple[str, int]] = []
     for n, row in enumerate(rows, start=profile.skip_rows + 2):
         try:
             posted = _parse_date(_get(row, profile.date_column), profile.date_format)
             if profile.amount_column:
-                amt = parse_amount(_get(row, profile.amount_column), cfg.currency)
+                amt = parse_amount(_get(row, profile.amount_column), currency)
             else:
                 debit, credit = _get(row, profile.debit_column), _get(row, profile.credit_column)
-                amt = (parse_amount(credit, cfg.currency) if credit else 0) - (
-                    abs(parse_amount(debit, cfg.currency)) if debit else 0
+                amt = (parse_amount(credit, currency) if credit else 0) - (
+                    abs(parse_amount(debit, currency)) if debit else 0
                 )
             if profile.amount_sign == "invert":
                 amt = -amt
@@ -308,7 +314,7 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
         bal = _get(row, profile.balance_column)
         if bal:
             try:
-                balances.append((posted, parse_amount(bal, cfg.currency)))
+                balances.append((posted, parse_amount(bal, currency)))
             except AmountError:
                 pass
     # Keep only the latest balance per date (last row seen for that date).
@@ -318,7 +324,7 @@ def parse_csv(text: str, cfg: Config, profile_name: str | None = None) -> Parsed
     return ParsedStatement(
         format="csv",
         txns=txns,
-        currency=cfg.currency,
+        currency=currency,
         balances=sorted(latest.items()),
         profile=profile.name,
         account_name=profile.account,
@@ -369,6 +375,7 @@ def init_profile(path: Path, cfg: Config, name: str | None = None, kind: str = "
     lines += [
         'amount_sign = "as_is"   # set to "invert" if purchases show as positive numbers',
         '# account = "Chase Checking"   # optional: import straight into this account',
+        '# currency = "EUR"             # optional: the statement\'s currency (default: your home currency)',
     ]
     return _write_profile(cfg, name, lines)
 

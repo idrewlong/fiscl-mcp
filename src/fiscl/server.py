@@ -35,7 +35,7 @@ fiscl answers questions about the user's own finances from bank exports stored o
 - apply_categories changes data. Always call it with dry_run=true first, show the user the plan,
   and only call with dry_run=false after they agree. The same goes for set_scope, log_trip, export_schedule_c,
   record_1099, manage_business, add_note, tag_transactions, split_transaction, dismiss_recurring, set_budget,
-  manage_asset, and manage_goal.
+  manage_asset, manage_goal, and set_fx_rate.
 - Report facts about the user's data. Do not present output as financial, tax, or investment advice.
   Tax tools organize records for the user and their preparer; frame write-offs as questions to confirm.
 - Amount arguments are in normal units (dollars), negative for money out.
@@ -325,6 +325,45 @@ def build_server(cfg: Config) -> MCPServer:
         limit: Annotated[int | None, Field(description="Max rows to return")] = None,
     ) -> dict[str, Any]:
         return run("holdings", analysis.holdings, account=account, as_of=as_of, group_by=group_by, limit=limit)
+
+    @mcp.tool(
+        annotations=READ_ONLY,
+        description=(
+            "The exchange rates the user has entered (newest first), plus gaps: for each foreign currency in use, "
+            "the date ranges of transactions that have no usable rate and are therefore left out of totals. A rate "
+            "is home-currency units per 1 unit of the currency. fiscl never looks rates up; tell the user to add "
+            "missing ones with set_fx_rate or `fiscl fx import`."
+        ),
+    )
+    def list_fx_rates(
+        currency: Annotated[str | None, Field(description="3-letter code such as EUR")] = None,
+        start_date: DateArg = None,
+        end_date: DateArg = None,
+        limit: Annotated[int | None, Field(description="Max rates to return")] = None,
+    ) -> dict[str, Any]:
+        return run(
+            "list_fx_rates",
+            analysis.list_fx_rates,
+            currency=currency,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
+    @mcp.tool(
+        annotations=LOCAL_DESTRUCTIVE,
+        description=(
+            "Add, replace or remove the user's exchange rates. Each item is {date, currency, rate} where rate is "
+            "home-currency units per 1 unit of the currency (a positive number, at most 12 significant digits), or "
+            "null to remove that day's rate. Applying recomputes the home-currency amounts of the transactions the "
+            "rates reach (a rate covers the following days, up to the configured age limit, default 7). dry_run "
+            "defaults to true and returns before/after per item plus affected_transactions without saving; show the "
+            "user and only call with dry_run=false after they agree. Only use rates the user gives you; never "
+            "invent or recall a market rate."
+        ),
+    )
+    def set_fx_rate(items: list[dict[str, Any]], dry_run: bool = True) -> dict[str, Any]:
+        return run("set_fx_rate", analysis.set_fx_rate, items=items, dry_run=dry_run)
 
     @mcp.tool(
         annotations=READ_ONLY,

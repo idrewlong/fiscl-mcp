@@ -9,7 +9,24 @@ import re
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 SYMBOLS = {"USD": "$", "CAD": "CA$", "EUR": "€", "GBP": "£", "AUD": "A$", "JPY": "¥"}
-ZERO_DECIMAL = {"JPY", "KRW"}
+
+# Minor-unit exponents (ISO 4217 "minor unit" column): the number of decimal places a currency's minor unit carries.
+# Zero-exponent: BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX UYI VND VUV XAF XOF XPF. Three-exponent: BHD IQD JOD KWD
+# LYD OMR TND. Every other currency uses two. (Source: ISO 4217 list one, published by SIX Group.)
+_ZERO_EXPONENT = ("BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG")
+_ZERO_EXPONENT += ("RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF")
+_THREE_EXPONENT = ("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND")
+CURRENCY_EXPONENT: dict[str, int] = {**dict.fromkeys(_ZERO_EXPONENT, 0), **dict.fromkeys(_THREE_EXPONENT, 3)}
+ZERO_DECIMAL = {code for code, exp in CURRENCY_EXPONENT.items() if exp == 0}
+_CURRENCY_CODE = re.compile(r"[A-Z]{3}")
+
+
+def exponent(currency: str) -> int:
+    return CURRENCY_EXPONENT.get(currency.upper(), 2)
+
+
+def is_currency_code(value: object) -> bool:
+    return isinstance(value, str) and _CURRENCY_CODE.fullmatch(value) is not None
 
 
 class AmountError(ValueError):
@@ -28,7 +45,7 @@ def _check_range(d: Decimal, original: object) -> Decimal:
 
 
 def _scale(currency: str) -> int:
-    return 1 if currency.upper() in ZERO_DECIMAL else 100
+    return 10 ** exponent(currency)
 
 
 def parse_amount(text: str, currency: str = "USD") -> int:
@@ -92,7 +109,8 @@ def fmt(minor: int, currency: str = "USD") -> str:
     sign = "-" if minor < 0 else ""
     whole, frac = divmod(abs(minor), scale)
     sym = SYMBOLS.get(currency.upper(), currency.upper() + " ")
-    body = f"{whole:,}" if scale == 1 else f"{whole:,}.{frac:02d}"
+    places = exponent(currency)
+    body = f"{whole:,}" if places == 0 else f"{whole:,}.{frac:0{places}d}"
     return f"{sign}{sym}{body}"
 
 

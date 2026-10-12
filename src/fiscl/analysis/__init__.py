@@ -8,6 +8,7 @@ from ..common import MAX_BULK_ROWS, data_freshness, meta, resolve_target
 from .budgets import budget_status, set_budget, suggest_budgets
 from .edits import add_note, apply_categories, dismiss_recurring, split_transaction, tag_transactions
 from .forecast import LIQUID_TYPES, forecast_cash
+from .fx_tools import list_fx_rates, set_fx_rate
 from .holdings import holdings
 from .monitoring import find_anomalies, refund_tracker, subscription_watchdog
 from .planning import afford, debt_payoff, goal_progress, manage_asset, manage_goal, net_worth
@@ -33,6 +34,7 @@ __all__ = [
     "holdings",
     "import_status",
     "list_accounts",
+    "list_fx_rates",
     "list_recurring",
     "list_uncategorized",
     "manage_asset",
@@ -44,6 +46,7 @@ __all__ = [
     "refund_tracker",
     "resolve_target",
     "set_budget",
+    "set_fx_rate",
     "spending_summary",
     "split_transaction",
     "subscription_watchdog",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -310,7 +310,69 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX ix_holdings_snapshot ON holdings(snapshot_id);
     """,
+    # 10 — v2 phase 4: exchange rates (typed in or imported by the user; fiscl never looks any up) and a materialized
+    # home-currency amount. `rate` = home units per 1 unit of `currency`, a Decimal string. amount_home is NULL when a
+    # foreign row has no usable rate. txn_lines.amount is now the home amount, so every aggregate over TXN_FROM sums
+    # home currency with no query edits; orig_amount/orig_currency expose what the bank reported. The triggers keep
+    # home-currency rows at amount_home = amount for any writer (they read meta 'home_currency', set by the Python
+    # post-step in db.POST_MIGRATION, which also backfills). Down: restore the pre-migration backup.
+    """
+    CREATE TABLE fx_rates (
+        rate_date TEXT NOT NULL,
+        currency  TEXT NOT NULL CHECK (currency GLOB '[A-Z][A-Z][A-Z]'),
+        rate      TEXT NOT NULL,
+        source    TEXT NOT NULL CHECK (source IN ('manual','csv')),
+        PRIMARY KEY (currency, rate_date)
+    );
+    ALTER TABLE transactions ADD COLUMN amount_home INTEGER;
+    ALTER TABLE splits ADD COLUMN amount_home INTEGER;
+    CREATE INDEX ix_txn_unconverted ON transactions(posted_date) WHERE amount_home IS NULL;
+    CREATE TRIGGER trg_txn_home_insert AFTER INSERT ON transactions
+    WHEN NEW.amount_home IS NULL AND NEW.currency = (SELECT value FROM meta WHERE key = 'home_currency')
+    BEGIN UPDATE transactions SET amount_home = NEW.amount WHERE id = NEW.id; END;
+    CREATE TRIGGER trg_txn_home_update AFTER UPDATE OF amount, currency ON transactions
+    WHEN NEW.currency = (SELECT value FROM meta WHERE key = 'home_currency') AND NEW.amount_home IS NOT NEW.amount
+    BEGIN UPDATE transactions SET amount_home = NEW.amount WHERE id = NEW.id; END;
+    CREATE TRIGGER trg_split_home_insert AFTER INSERT ON splits
+    WHEN NEW.amount_home IS NULL AND (SELECT currency FROM transactions WHERE id = NEW.transaction_id)
+         = (SELECT value FROM meta WHERE key = 'home_currency')
+    BEGIN UPDATE splits SET amount_home = NEW.amount WHERE id = NEW.id; END;
+    CREATE TRIGGER trg_split_home_update AFTER UPDATE OF amount ON splits
+    WHEN (SELECT currency FROM transactions WHERE id = NEW.transaction_id)
+         = (SELECT value FROM meta WHERE key = 'home_currency') AND NEW.amount_home IS NOT NEW.amount
+    BEGIN UPDATE splits SET amount_home = NEW.amount WHERE id = NEW.id; END;
+    DROP VIEW txn_lines;
+    CREATE VIEW txn_lines AS
+    SELECT t.id AS id, NULL AS split_id, t.account_id, t.posted_date, t.amount_home AS amount, t.currency,
+           t.raw_description, t.merchant, t.memo, t.category_id, t.category_source, t.scope,
+           t.transfer_group, t.is_pending, t.note, t.import_id, t.business_id,
+           t.amount AS orig_amount, t.currency AS orig_currency
+      FROM transactions t
+     WHERE NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)
+    UNION ALL
+    SELECT t.id, s.id, t.account_id, t.posted_date, s.amount_home, t.currency,
+           t.raw_description, t.merchant, t.memo, s.category_id, 'manual', COALESCE(s.scope, t.scope),
+           t.transfer_group, t.is_pending, COALESCE(s.note, t.note), t.import_id,
+           COALESCE(s.business_id, t.business_id), s.amount, t.currency
+      FROM splits s JOIN transactions t ON t.id = s.transaction_id;
+    """,
 ]
+
+
+def _post_fx(conn: sqlite3.Connection, cfg: Config) -> None:
+    """Migration 10 backfill, inside its transaction: record the home currency, then home-currency rows get
+    amount_home = amount. Foreign rows stay NULL: no rate can exist before this migration."""
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('home_currency', ?)", (cfg.currency,))
+    conn.execute("UPDATE transactions SET amount_home = amount WHERE currency = ?", (cfg.currency,))
+    conn.execute(
+        "UPDATE splits SET amount_home = amount "
+        "WHERE transaction_id IN (SELECT id FROM transactions WHERE currency = ?)",
+        (cfg.currency,),
+    )
+
+
+# Python steps that run right after a migration's SQL, in the same transaction (keyed by the migration's number).
+POST_MIGRATION: dict[int, Callable[[sqlite3.Connection, Config], None]] = {10: _post_fx}
 
 DEFAULT_BUSINESS_ID = 1
 
@@ -360,13 +422,15 @@ DEFAULT_CATEGORIES: list[tuple[str, str]] = [
 
 # Rows that count as spending: money out, or refunds into an expense category.
 SPENDING_FILTER = """
-    t.transfer_group IS NULL
+    t.amount IS NOT NULL
+    AND t.transfer_group IS NULL
     AND COALESCE(c.kind, 'expense') NOT IN ('transfer', 'ignore', 'income')
     AND (t.amount < 0 OR c.kind = 'expense')
 """
 # Rows that count as income: money in that isn't a transfer, ignored, or an expense refund.
 INCOME_FILTER = """
-    t.transfer_group IS NULL
+    t.amount IS NOT NULL
+    AND t.transfer_group IS NULL
     AND t.amount > 0
     AND COALESCE(c.kind, 'income') NOT IN ('transfer', 'ignore', 'expense')
 """
@@ -420,10 +484,13 @@ def migrate(conn: sqlite3.Connection, cfg: Config) -> None:
         # instead of leaving half the script applied. (SQLite DDL is transactional.)
         script = (
             f"BEGIN;\n{MIGRATIONS[version]}\nDELETE FROM schema_version;\n"
-            f"INSERT INTO schema_version (version) VALUES ({int(version) + 1});\nCOMMIT;"
+            f"INSERT INTO schema_version (version) VALUES ({int(version) + 1});"
         )
         try:
             conn.executescript(script)
+            if (post := POST_MIGRATION.get(version + 1)) is not None:
+                post(conn, cfg)
+            conn.execute("COMMIT")
         except BaseException:
             if conn.in_transaction:
                 conn.rollback()

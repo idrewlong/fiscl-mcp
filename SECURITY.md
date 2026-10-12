@@ -40,7 +40,7 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 
 ## Holdings
 
-Positions files are parsed locally. There are no price or FX lookups; prices come only from your imports. Full account numbers in broker files are never stored: the column is ignored by default, or cut to the last 4 digits only to choose the matching fiscl account.
+Positions files are parsed locally. There are no price or FX lookups: prices come only from your imports, and exchange rates are only ones you type (`set_fx_rate`) or import (`fiscl fx import`). Full account numbers in broker files are never stored: the column is ignored by default, or cut to the last 4 digits only to choose the matching fiscl account.
 
 ## Tax records you enter
 

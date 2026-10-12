@@ -21,7 +21,7 @@ from ..common import meta, year_bounds
 from ..config import DIR_MODE, FILE_MODE, Config
 from ..db import BUSINESS_SQL, SCOPE_SQL, TXN_FROM
 from ..guard import GuardError, choice, clean_text, redact_text
-from ..money import ZERO_DECIMAL, amount
+from ..money import amount, exponent
 from .businesses import businesses_for_period, get_business
 from .lines import DISCLAIMER, SCHEDULE_C_LINES, line_for
 from .schedule_c import schedule_c_draft
@@ -85,10 +85,11 @@ def md_text(value: object) -> str:
 
 def plain(minor: int, currency: str) -> str:
     """Plain decimal string for a spreadsheet: no symbol, no grouping."""
-    if currency in ZERO_DECIMAL:
+    places = exponent(currency)
+    if places == 0:
         return str(int(minor))
-    whole, cents = divmod(abs(int(minor)), 100)
-    return f"{'-' if minor < 0 else ''}{whole}.{cents:02d}"
+    whole, frac = divmod(abs(int(minor)), 10**places)
+    return f"{'-' if minor < 0 else ''}{whole}.{frac:0{places}d}"
 
 
 # --- content -------------------------------------------------------------------------------

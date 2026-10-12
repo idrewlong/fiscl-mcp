@@ -61,6 +61,8 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "forecast_cash": {},
     "net_worth": {},
     "holdings": {},
+    "list_fx_rates": {},
+    "set_fx_rate": {"items": [{"date": "2026-10-01", "currency": "EUR", "rate": "1.1"}]},
     "afford": {"amount": 2000},
     "debt_payoff": {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]},
     "goal_progress": {},

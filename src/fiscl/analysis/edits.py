@@ -5,6 +5,7 @@ Every writer here defaults to a dry run and returns `common.plan_result`; nothin
 
 from __future__ import annotations
 
+from .. import fx
 from ..categorize import append_merchant_rule
 from ..common import (
     MAX_TAGS_PER_ITEM,
@@ -228,7 +229,7 @@ def _split_parts(conn, parts, parent: dict, cfg: Config) -> list[dict]:
     for i, part in enumerate(parts, start=1):
         if not isinstance(part, dict):
             raise GuardError(f"part {i}: must be an object with amount and category")
-        minor = money_arg(part.get("amount"), cfg, f"part {i} amount")
+        minor = money_arg(part.get("amount"), cfg, f"part {i} amount", currency=parent["currency"])
         if not minor:
             raise GuardError(f"part {i}: amount is required and can't be zero")
         if (minor < 0) != negative:
@@ -283,12 +284,12 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
             "transaction_id": parent["id"],
             "date": parent["posted_date"],
             "merchant": parent["merchant"],
-            "amount": amount(parent["amount"], cfg.currency),
+            "amount": amount(parent["amount"], parent["currency"]),
             "action": "split" if new_parts else "remove_split",
             "replaces_existing_split": bool(existing),
             "parts": [
                 {
-                    "amount": amount(p["minor"], cfg.currency),
+                    "amount": amount(p["minor"], parent["currency"]),
                     "category": p["category"],
                     "creates_category": get_category_id(conn, p["category"]) is None,
                     "scope": p["scope"],
@@ -314,4 +315,5 @@ def split_transaction(conn, cfg: Config, transaction_id=None, parts=None, dry_ru
                     p["business_id"],
                 ),
             )
+        fx.refresh_home_amounts(conn, cfg, ids=[parent["id"]])  # parts get their share of the parent's home amount
     return with_meta(conn, cfg, plan_result(plan, 1, dry_run, "Call again with dry_run=false to apply."))

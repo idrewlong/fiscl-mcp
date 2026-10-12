@@ -108,9 +108,10 @@ def refresh_recurring(conn: sqlite3.Connection, cfg: Config, today: date | None 
     today = today or date.today()
     since = add_months(today, -LOOKBACK_MONTHS).isoformat()
     rows = conn.execute(
-        """SELECT t.merchant, t.account_id, t.posted_date, t.amount, c.name AS category
+        """SELECT t.merchant, t.account_id, t.posted_date, t.amount_home AS amount, c.name AS category
            FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
            WHERE t.transfer_group IS NULL AND t.is_pending = 0 AND t.posted_date >= ?
+             AND t.amount_home IS NOT NULL
              AND COALESCE(c.kind, '') != 'ignore' AND t.merchant IS NOT NULL
            ORDER BY t.posted_date""",
         (since,),
