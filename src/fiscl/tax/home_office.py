@@ -24,10 +24,20 @@ METHOD_NOTE = (
 )
 
 
+def _exact_sqft(square_feet: int, months_used: int) -> Decimal:
+    """Square feet averaged over the year, never above the 300 sq ft cap. Not rounded: money is computed from this."""
+    return min(Decimal(square_feet) * months_used / 12, Decimal(MAX_SQFT))
+
+
 def allowable_sqft(square_feet: int, months_used: int) -> Decimal:
-    """Square feet averaged over the year, one decimal place, never above the 300 sq ft cap."""
-    avg = (Decimal(square_feet) * months_used / 12).quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN)
-    return min(avg, Decimal(MAX_SQFT))
+    """The averaged area rounded to one decimal place, for display only."""
+    return _exact_sqft(square_feet, months_used).quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN)
+
+
+def exact_deduction_minor(square_feet: int, months_used: int) -> int:
+    """$5 per averaged square foot in minor units, rounded half-even once at the end."""
+    exact = _exact_sqft(square_feet, months_used) * RATE_PER_SQFT_MINOR
+    return int(exact.quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
 
 
 def home_office_deduction(cfg: Config, year: int, profit_before_minor: int) -> dict | None:
@@ -36,8 +46,8 @@ def home_office_deduction(cfg: Config, year: int, profit_before_minor: int) -> d
     if ho is None:
         return None
     cur = cfg.currency
-    area = allowable_sqft(ho.square_feet, ho.months_used)
-    computed = int((area * RATE_PER_SQFT_MINOR).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+    area = allowable_sqft(ho.square_feet, ho.months_used)  # shown rounded; the deduction below uses the exact area
+    computed = exact_deduction_minor(ho.square_feet, ho.months_used)
     line_30 = min(computed, max(profit_before_minor, 0))
     return {
         "method": "simplified",

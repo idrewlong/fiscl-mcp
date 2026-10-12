@@ -442,9 +442,9 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 **Tax**
 - [x] Schedule C export (CSV + Markdown; PDF later)
 - [x] Home office (simplified)
-- [ ] 1099 reconciliation
+- [x] 1099 reconciliation
 - [ ] Multiple businesses
-- [ ] State estimates
+- [x] State estimates (planning depth: due dates, your own rate)
 - [ ] Receipts
 
 **Editing**

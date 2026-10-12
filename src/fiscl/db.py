@@ -230,6 +230,23 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # 7 — v2 phase 3: 1099 forms the user received (typed in by hand). Amounts are minor units. A named unique
+    # index, not an inline UNIQUE, so a later migration can replace it without rebuilding the table.
+    # Down: DROP TABLE forms_1099;
+    """
+    CREATE TABLE forms_1099 (
+        id              INTEGER PRIMARY KEY,
+        tax_year        INTEGER NOT NULL CHECK (tax_year BETWEEN 2000 AND 2100),
+        form            TEXT NOT NULL CHECK (form IN ('nec','k','misc')),
+        payer           TEXT NOT NULL,
+        amount          INTEGER NOT NULL CHECK (amount > 0),
+        match_merchants TEXT NOT NULL DEFAULT '[]',
+        note            TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX ux_forms_1099 ON forms_1099 (tax_year, form, payer COLLATE NOCASE);
+    """,
 ]
 
 # The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).

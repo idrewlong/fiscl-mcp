@@ -51,6 +51,9 @@ class TaxConfig:
     ss_wage_base: dict[int, int] = field(default_factory=lambda: dict(DEFAULT_SS_WAGE_BASE))
     # Optional: your own planning rate for income tax on business profit, e.g. 22.
     income_tax_rate_pct: str | None = None
+    # Optional: two-letter state code (or DC) and your own planning rate for state income tax, 0-20.
+    state: str | None = None
+    state_income_tax_rate_pct: str | None = None
     home_office: dict[int, HomeOffice] = field(default_factory=dict)
 
 
@@ -153,6 +156,11 @@ amount_tolerance_pct = 15
 # Your own planning rate for income tax on business profit (used by estimated_tax). Leave unset to
 # get self-employment tax only.
 # income_tax_rate_pct = 22
+
+# Your state (two-letter code, or DC) adds state due dates and a planning-rate estimate to estimated_tax. The rate
+# is your own number (0-20), applied to the same base as the federal estimate; it is not a state tax calculation.
+# state = "MS"
+# state_income_tax_rate_pct = 4.4
 
 # Override or add years as the IRS/SSA publish them:
 # [tax.mileage_cents]
@@ -277,6 +285,18 @@ def _load_home_office(raw: Any) -> dict[int, HomeOffice]:
     return out
 
 
+def _load_state(raw: Any) -> str | None:
+    """tax.state: a two-letter code from the states table, case-insensitive."""
+    if raw is None:
+        return None
+    from .tax.states import STATES  # deferred: the tax package imports this module
+
+    code = raw.strip().upper() if isinstance(raw, str) else None
+    if code not in STATES:
+        raise ConfigError("tax.state must be a two-letter US state code (or DC), like MS")
+    return code
+
+
 def _load_debts(raw: Any, currency: str) -> dict[str, DebtTerms]:
     """Parse the optional [debts."Account name"] tables: apr (percent) and min_payment (dollars), both required."""
     if not isinstance(raw, dict):
@@ -328,6 +348,14 @@ def load_config(home: Path | None = None) -> Config:
             if not 0 <= rate <= 60:
                 raise ConfigError("tax.income_tax_rate_pct must be between 0 and 60")
             tax.income_tax_rate_pct = str(rate)
+        tax.state = _load_state(tax_raw.get("state"))
+        if tax_raw.get("state_income_tax_rate_pct") is not None:
+            state_rate = tax_raw["state_income_tax_rate_pct"]
+            if isinstance(state_rate, bool) or not isinstance(state_rate, int | float):
+                raise ConfigError("tax.state_income_tax_rate_pct must be a number between 0 and 20")
+            if not 0 <= Decimal(str(state_rate)) <= 20:
+                raise ConfigError("tax.state_income_tax_rate_pct must be a number between 0 and 20")
+            tax.state_income_tax_rate_pct = str(Decimal(str(state_rate)))
         tax.home_office = _load_home_office(tax_raw.get("home_office", {}))
     except (ValueError, InvalidOperation) as exc:
         raise ConfigError(f"[tax] section: {exc}") from exc

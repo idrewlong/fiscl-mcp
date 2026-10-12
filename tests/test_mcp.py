@@ -53,6 +53,8 @@ async def test_tools_listed_with_annotations(demo):
         "refund_tracker",
         "merchant_history",
         "category_trend",
+        "record_1099",
+        "reconcile_1099",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
@@ -67,6 +69,7 @@ async def test_tools_listed_with_annotations(demo):
         "refund_tracker",
         "merchant_history",
         "category_trend",
+        "reconcile_1099",
     ):
         assert tools[name].annotations.read_only_hint is True, name
     destructive_tools = (
@@ -79,6 +82,7 @@ async def test_tools_listed_with_annotations(demo):
         "manage_asset",
         "manage_goal",
         "set_scope",
+        "record_1099",
     )
     for name in destructive_tools:
         a = tools[name].annotations

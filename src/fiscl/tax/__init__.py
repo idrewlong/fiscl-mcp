@@ -11,10 +11,12 @@ from __future__ import annotations
 from .edits import log_trip, mileage_log, set_scope
 from .estimates import due_dates, estimated_tax
 from .export import export_schedule_c
+from .forms1099 import reconcile_1099, record_1099
 from .home_office import home_office_deduction
 from .lines import CATEGORY_DEFAULT_LINES, DISCLAIMER, LINE_ORDER, SCHEDULE_C_LINES, line_for
 from .review import DE_MINIMIS_MINOR, review_writeoffs
 from .schedule_c import mileage_rate, mileage_summary, schedule_c_draft
+from .states import STATES, VERIFIED_FOR, next_business_day
 
 __all__ = [
     "CATEGORY_DEFAULT_LINES",
@@ -22,6 +24,8 @@ __all__ = [
     "DISCLAIMER",
     "LINE_ORDER",
     "SCHEDULE_C_LINES",
+    "STATES",
+    "VERIFIED_FOR",
     "due_dates",
     "estimated_tax",
     "export_schedule_c",
@@ -31,6 +35,9 @@ __all__ = [
     "mileage_log",
     "mileage_rate",
     "mileage_summary",
+    "next_business_day",
+    "reconcile_1099",
+    "record_1099",
     "review_writeoffs",
     "schedule_c_draft",
     "set_scope",

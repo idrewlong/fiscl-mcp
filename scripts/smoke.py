@@ -75,7 +75,7 @@ def counts(db: Path) -> tuple:
     with sqlite3.connect(db) as conn:
         return tuple(
             conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            for t in ("transactions", "tags", "splits", "manual_assets", "goals", "trips", "categories")
+            for t in ("transactions", "tags", "splits", "manual_assets", "goals", "trips", "categories", "forms_1099")
         )
 
 
@@ -128,6 +128,9 @@ async def run(home: Path) -> Smoke:
             ("list_uncategorized", {}),
             ("schedule_c_draft", {}),
             ("estimated_tax", {"income_tax_rate_pct": 22}),
+            ("estimated_tax", {"income_tax_rate_pct": 22, "state": "CA", "state_income_tax_rate_pct": 6}),
+            ("estimated_tax", {"state": "TX"}),
+            ("reconcile_1099", {}),
             ("review_writeoffs", {}),
             ("mileage_log", {}),
         ]
@@ -149,6 +152,10 @@ async def run(home: Path) -> Smoke:
             ("set_scope", {"items": [{"transaction_ids": [tid], "scope": "business"}]}),
             ("log_trip", {"trip_date": "2026-01-02", "miles": 10, "purpose": "Smoke test client visit"}),
             ("export_schedule_c", {"include_transactions": True}),
+            (
+                "record_1099",
+                {"items": [{"action": "add", "tax_year": 2026, "form": "nec", "payer": "Smoke Payer", "amount": 1000}]},
+            ),
         ]
         for tool, args in writes:
             await s.call(c, tool, args, DRY)
@@ -174,6 +181,11 @@ async def run(home: Path) -> Smoke:
             ("tag_transactions", {"items": [{"transaction_ids": [tid]}]}),
             ("set_budget", {"items": [{"category": "Groceries", "monthly": -5}]}),
             ("log_trip", {"trip_date": "2999-01-01", "miles": 5, "purpose": "future trip"}),
+            ("estimated_tax", {"state": "ZZ"}),
+            ("estimated_tax", {"state": "CA", "state_income_tax_rate_pct": 99}),
+            ("record_1099", {"items": [{"action": "remove", "id": 10**6}]}),
+            ("record_1099", {"items": [{"action": "add", "tax_year": 2026, "form": "w2", "payer": "X", "amount": 1}]}),
+            ("reconcile_1099", {"tax_year": 1800}),
             # not connected in a fresh demo home; must fail cleanly, not reach the network
             ("sync_accounts", {"provider": "teller"}),
             ("sync_accounts", {"provider": "plaid"}),

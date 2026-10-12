@@ -86,6 +86,8 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "log_trip": {"trip_date": "2026-10-01", "miles": 10, "purpose": "Client visit"},
     "mileage_log": {"year": 2026},
     "export_schedule_c": {"year": 2026, "include_transactions": True},
+    "record_1099": {"items": [{"action": "add", "tax_year": 2026, "form": "nec", "payer": "Acme", "amount": 100}]},
+    "reconcile_1099": {"tax_year": 2026},
     "list_connections": {},
 }
 

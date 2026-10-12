@@ -109,12 +109,24 @@ def test_bad_home_office_year_is_rejected(cfg):
         with_config(cfg, "[tax.home_office.abcd]\nsquare_feet = 100\n")
 
 
-def test_partial_month_rounding_is_one_decimal_half_even(conn, cfg, accounts):
+def test_partial_month_deduction_is_exact_and_area_display_is_rounded(conn, cfg, accounts):
     cfg = with_config(cfg, "[tax.home_office.2026]\nsquare_feet = 155\nmonths_used = 7\n")
     seed(conn, accounts, 400_000)
     ho = tax.schedule_c_draft(conn, cfg, year=2026, today=TODAY)["home_office"]
-    assert ho["allowable_square_feet"] == "90.4"  # 155 * 7 / 12 = 90.41666...
-    assert ho["computed"]["minor"] == 45_200
+    assert ho["allowable_square_feet"] == "90.4"  # display only: 155 * 7 / 12 = 90.41666...
+    # The dollars use the exact area, not the rounded one: 155 * 7 / 12 * $5 = $452.0833... -> $452.08.
+    assert ho["computed"]["minor"] == 45_208
+    assert ho["line_30"]["display"] == "$452.08"
+
+
+def test_exact_deduction_rounds_half_even_in_minor_units():
+    from fiscl.tax.home_office import exact_deduction_minor
+
+    assert exact_deduction_minor(300, 12) == 150_000
+    assert exact_deduction_minor(301, 12) == 150_000  # capped at 300 sq ft
+    assert exact_deduction_minor(155, 7) == 45_208
+    assert exact_deduction_minor(1, 6) == 250  # $2.50
+    assert exact_deduction_minor(1, 1) == 42  # 500/12 = 41.67 -> 42
 
 
 def test_estimated_tax_uses_profit_after_line_30(conn, cfg, accounts):

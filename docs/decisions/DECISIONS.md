@@ -56,3 +56,6 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - **Decision:** Build the QBO read-only connector as the last Phase 4 slice, sandbox-only. Production stays disabled until a human completes Intuit's production questionnaire and confirms that OAuth Playground tokens work for a personal app. If not, QBO remains a sandbox test harness.
 - **Why:** Research shows it's free (Builder tier: 500k reads/month, blocked rather than billed over the cap), which meets the "free or cheap" rule. But production OAuth needs an https redirect, which a local-only tool can't provide without a workaround.
 - **Where:** `docs/research/2026-10-11-quickbooks-online-readonly.md`, `specs/2026-10-11-2224-v2-phase4-data.md`.
+
+## 2026-10-11 — Federal and state due dates roll to the next business day
+- **Decision:** `estimated_tax` rolls every due date (federal 1040-ES and state) to the next business day (weekends plus US federal holidays). State-only holidays aren't modeled and the notes say so. Shapes: `state` keys are omitted when no state is configured, and `suggested_per_quarter_with_state` is a per-quarter list because state percentages can differ.

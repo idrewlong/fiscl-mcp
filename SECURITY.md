@@ -38,6 +38,10 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 
 `export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions.
 
+## Tax records you enter
+
+1099 forms you record (`record_1099`) are stored only in the local database. Nothing is fetched. Payer names and amounts never appear in error messages or the audit log.
+
 ## Recommendations for users
 
 1. Turn on full-disk encryption.
