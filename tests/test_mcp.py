@@ -42,11 +42,28 @@ async def test_tools_listed_with_annotations(demo):
         "split_transaction",
         "dismiss_recurring",
         "set_budget",
+        "manage_asset",
+        "net_worth",
+        "afford",
+        "debt_payoff",
+        "manage_goal",
+        "goal_progress",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
     assert tools["apply_categories"].annotations.read_only_hint is False
-    for name in ("add_note", "tag_transactions", "split_transaction", "dismiss_recurring", "set_budget"):
+    for name in ("net_worth", "afford", "debt_payoff", "goal_progress"):
+        assert tools[name].annotations.read_only_hint is True, name
+    write_tools = (
+        "add_note",
+        "tag_transactions",
+        "split_transaction",
+        "dismiss_recurring",
+        "set_budget",
+        "manage_asset",
+        "manage_goal",
+    )
+    for name in write_tools:
         a = tools[name].annotations
         assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False, name
         assert "dry_run" in tools[name].description, name
@@ -61,6 +78,10 @@ async def test_every_read_tool_returns_meta_and_display_amounts(demo):
             ("detect_recurring", {}),
             ("list_accounts", {}),
             ("schedule_c_draft", {"year": 2026}),
+            ("net_worth", {}),
+            ("afford", {"amount": 2000}),
+            ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]}),
+            ("goal_progress", {}),
         ]:
             r = await c.call_tool(name, args)
             assert not r.is_error, (name, r.content)
@@ -137,6 +158,42 @@ async def test_new_write_tools_default_to_dry_run_and_change_nothing(demo, conn)
         r = await c.call_tool("set_budget", {"items": [{"category": "Dining", "monthly": 123}], "dry_run": False})
         assert r.structured_content["dry_run"] is False
         assert "123.00" in demo.budgets_file.read_text()
+
+
+async def test_planning_write_tools_default_to_dry_run_and_change_nothing(demo, conn):
+    def snapshot():
+        return (
+            conn.execute("SELECT COUNT(*) FROM manual_assets").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0],
+        )
+
+    calls = {
+        "manage_asset": {"action": "add", "name": "Truck", "kind": "vehicle", "value": 18000},
+        "manage_goal": {"action": "add", "name": "Trip", "target": 3000, "saved": 100},
+    }
+    async with Client(build_server(demo)) as c:
+        for name, args in calls.items():
+            r = await c.call_tool(name, args)
+            assert not r.is_error, (name, r.content)
+            assert r.structured_content["dry_run"] is True and r.structured_content["changes"], name
+            assert "data_freshness" in r.structured_content["meta"], name
+        assert snapshot() == (0, 0)
+        for name, args in [
+            ("manage_asset", {"action": "add", "name": "X", "kind": "boat", "value": 1}),
+            ("manage_goal", {"action": "add", "name": "X", "target": -1}),
+            ("afford", {"amount": -5}),
+            ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000}]}),
+            ("goal_progress", {"name": "missing"}),
+        ]:
+            assert (await c.call_tool(name, args)).is_error, name
+        for name, args in calls.items():
+            r = await c.call_tool(name, {**args, "dry_run": False})
+            assert r.structured_content["dry_run"] is False
+        assert snapshot() == (1, 1)
+        nw = (await c.call_tool("net_worth", {})).structured_content
+        assert any(a["name"] == "Truck" for a in nw["assets"])
+        af = (await c.call_tool("afford", {"amount": 2000})).structured_content
+        assert af["affordable"] == (af["with_purchase"]["lowest_balance"]["amount"]["minor"] >= af["buffer"]["minor"])
 
 
 async def test_output_is_redacted_and_audit_log_has_no_merchants(cfg, conn, accounts):

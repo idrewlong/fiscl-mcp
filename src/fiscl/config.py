@@ -45,6 +45,14 @@ class TaxConfig:
 
 
 @dataclass
+class DebtTerms:
+    """Terms the bank export doesn't carry, entered once under [debts."Account name"] in config.toml."""
+
+    apr_pct: str  # annual percentage rate, e.g. "24.99"
+    min_payment: int  # minor units
+
+
+@dataclass
 class Config:
     home: Path
     currency: str = "USD"
@@ -54,6 +62,7 @@ class Config:
     recurring_amount_tolerance_pct: int = 15
     guard: GuardConfig = field(default_factory=GuardConfig)
     tax: TaxConfig = field(default_factory=TaxConfig)
+    debts: dict[str, DebtTerms] = field(default_factory=dict)
 
     @property
     def db_path(self) -> Path:
@@ -128,6 +137,12 @@ amount_tolerance_pct = 15
 # 2027 = "75"
 # [tax.ss_wage_base]
 # 2027 = 190000
+
+# Optional: interest rates and minimums for debt_payoff (bank exports don't carry them).
+# Key = the account name in fiscl. apr is a percent, min_payment is dollars.
+# [debts."Chase Sapphire"]
+# apr = 24.99
+# min_payment = 35
 """
 
 DEFAULT_RULES = """\
@@ -215,6 +230,30 @@ def _int(section: dict, key: str, default: int, lo: int, hi: int, where: str) ->
     return value
 
 
+def _load_debts(raw: Any, currency: str) -> dict[str, DebtTerms]:
+    """Parse the optional [debts."Account name"] tables: apr (percent) and min_payment (dollars), both required."""
+    if not isinstance(raw, dict):
+        raise ConfigError('[debts] must be a table of [debts."Account name"] entries')
+    out: dict[str, DebtTerms] = {}
+    for name, entry in raw.items():
+        where = f"[debts.{name!r}]"
+        if not isinstance(entry, dict) or set(entry) - {"apr", "min_payment"}:
+            raise ConfigError(f"{where} takes only apr and min_payment")
+        if "apr" not in entry or "min_payment" not in entry:
+            raise ConfigError(f"{where} needs both apr (percent) and min_payment (dollars)")
+        try:
+            apr = Decimal(str(entry["apr"]))
+            minimum = to_minor(entry["min_payment"], currency)
+        except (InvalidOperation, AmountError) as exc:
+            raise ConfigError(f"{where}: {exc}") from exc
+        if isinstance(entry["apr"], bool) or not apr.is_finite() or not 0 <= apr <= 100:
+            raise ConfigError(f"{where}.apr must be a percentage between 0 and 100")
+        if minimum <= 0:
+            raise ConfigError(f"{where}.min_payment must be greater than 0")
+        out[name.lower()] = DebtTerms(apr_pct=str(apr), min_payment=minimum)
+    return out
+
+
 def load_config(home: Path | None = None) -> Config:
     home = (home or default_home()).expanduser()
     raw = _read_toml(home / "config.toml")
@@ -247,6 +286,7 @@ def load_config(home: Path | None = None) -> Config:
     return Config(
         home=home,
         tax=tax,
+        debts=_load_debts(raw.get("debts", {}), currency.upper()),
         currency=currency.upper(),
         timezone=str(raw.get("timezone", "America/Chicago")),
         transfer_window_days=_int(raw.get("transfers", {}), "window_days", 3, 0, 14, "transfers"),

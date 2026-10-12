@@ -30,6 +30,14 @@ def test_core_makes_no_network_calls(conn, cfg, monkeypatch):
     analysis.add_note(conn, cfg, transaction_id=1, note="n")
     analysis.tag_transactions(conn, cfg, [{"transaction_ids": [1], "add": ["x"]}])
     analysis.set_budget(conn, cfg, [{"category": "Dining", "monthly": 5}])
+    analysis.net_worth(conn, cfg, today=TODAY)
+    analysis.afford(conn, cfg, amount=2000, today=TODAY)
+    analysis.debt_payoff(
+        conn, cfg, debts=[{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}], today=TODAY
+    )
+    analysis.goal_progress(conn, cfg, today=TODAY)
+    analysis.manage_asset(conn, cfg, action="add", name="Truck", kind="vehicle", value=1, today=TODAY)
+    analysis.manage_goal(conn, cfg, action="add", name="Trip", target=10, today=TODAY)
     for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget"):
         build_chart(conn, cfg, kind=kind, today=TODAY)
 

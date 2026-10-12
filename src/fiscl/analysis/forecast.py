@@ -81,19 +81,57 @@ def _card_payment_events(
     return events
 
 
+def rolled_balance(conn, account_id: int, on: date | None = None) -> tuple[int, str] | None:
+    """One account's balance, rolled by transactions from its balance snapshot to `on` (default: all of them).
+
+    Returns (minor units, as_of of the snapshot used) or None when the account has no balance on file. With
+    `on`, uses the latest snapshot at or before that day, else the earliest later one rolled backward. Shared by
+    the forecast and net_worth so both agree on what an account holds.
+    """
+    if on is None:
+        row = latest_balance(conn, account_id)
+        if row is None:
+            return None
+        after = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ? AND posted_date > ?",
+            (account_id, row["as_of"]),
+        ).fetchone()[0]
+        return row["amount"] + after, row["as_of"]
+    day = on.isoformat()
+    row = conn.execute(
+        "SELECT amount, as_of FROM balances WHERE account_id = ? AND as_of <= ? ORDER BY as_of DESC LIMIT 1",
+        (account_id, day),
+    ).fetchone()
+    if row is not None:
+        after = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ? AND posted_date > ? "
+            "AND posted_date <= ?",
+            (account_id, row["as_of"], day),
+        ).fetchone()[0]
+        return row["amount"] + after, row["as_of"]
+    row = conn.execute(
+        "SELECT amount, as_of FROM balances WHERE account_id = ? AND as_of > ? ORDER BY as_of LIMIT 1",
+        (account_id, day),
+    ).fetchone()
+    if row is None:
+        return None
+    between = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ? AND posted_date > ? "
+        "AND posted_date <= ?",
+        (account_id, day, row["as_of"]),
+    ).fetchone()[0]
+    return row["amount"] - between, row["as_of"]
+
+
 def _starting_balance(conn, liquid, assumptions: list[str]) -> tuple[int, bool]:
     """Sum of each liquid account's latest balance, rolled forward by transactions posted since."""
     total, missing = 0, []
     for acct in liquid:
-        row = latest_balance(conn, acct["id"])
-        if row is None:
+        rolled = rolled_balance(conn, acct["id"])
+        if rolled is None:
             missing.append(acct["name"])
             continue
-        after = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE account_id = ? AND posted_date > ?",
-            (acct["id"], row["as_of"]),
-        ).fetchone()[0]
-        total += row["amount"] + after
+        total += rolled[0]
     if missing:
         assumptions.append(
             f"No balance on file for: {', '.join(missing)} (treated as $0). "
@@ -151,8 +189,14 @@ def forecast_cash(
     include_discretionary=True,
     scope="personal",
     today=None,
+    extra_events=None,
 ) -> dict:
-    """Project liquid-account balances forward from known recurring items."""
+    """Project liquid-account balances forward from known recurring items.
+
+    `extra_events` is internal (afford uses it, the MCP tool doesn't expose it): hypothetical
+    {date, merchant, kind, amount (signed minor units)} items. Those dated today or earlier come off the
+    starting balance; later ones join the projection.
+    """
     today = today or date.today()
     if not isinstance(days, int) or not 7 <= days <= 120:
         raise GuardError("days must be between 7 and 120")
@@ -177,6 +221,11 @@ def forecast_cash(
     events += _card_payment_events(conn, liquid_ids, today, horizon, assumptions, cfg.currency, acct_filter)
     if scope != "all":
         assumptions.append(f"Includes {scope} accounts only (scope={scope}); mixed accounts count as personal.")
+    for e in extra_events or []:
+        if e["date"] <= today.isoformat():
+            start_bal += e["amount"]
+        elif e["date"] <= horizon.isoformat():
+            events.append(e)
     events.sort(key=lambda e: (e["date"], e["amount"]))
     assumptions.append("Uses recurring items detected on checking/savings/cash accounts and their most recent amounts.")
 
