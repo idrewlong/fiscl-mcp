@@ -5,6 +5,8 @@ the module that matches their area (or a new one), and are re-exported here.
 """
 
 from ..common import MAX_BULK_ROWS, data_freshness, meta, resolve_target
+from .amazon import amazon_matches
+from .books import books_vs_bank, receivables
 from .budgets import budget_status, set_budget, suggest_budgets
 from .edits import add_note, apply_categories, dismiss_recurring, split_transaction, tag_transactions
 from .forecast import LIQUID_TYPES, forecast_cash
@@ -21,7 +23,9 @@ __all__ = [
     "MAX_BULK_ROWS",
     "add_note",
     "afford",
+    "amazon_matches",
     "apply_categories",
+    "books_vs_bank",
     "budget_status",
     "cash_flow",
     "category_trend",
@@ -43,6 +47,7 @@ __all__ = [
     "meta",
     "net_worth",
     "query_transactions",
+    "receivables",
     "refund_tracker",
     "resolve_target",
     "set_budget",

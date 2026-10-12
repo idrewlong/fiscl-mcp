@@ -58,6 +58,9 @@ async def test_tools_listed_with_annotations(demo):
         "holdings",
         "list_fx_rates",
         "set_fx_rate",
+        "amazon_matches",
+        "receivables",
+        "books_vs_bank",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
@@ -75,8 +78,12 @@ async def test_tools_listed_with_annotations(demo):
         "reconcile_1099",
         "holdings",
         "list_fx_rates",
+        "amazon_matches",
+        "receivables",
+        "books_vs_bank",
     ):
         assert tools[name].annotations.read_only_hint is True, name
+        assert tools[name].annotations.destructive_hint is False and tools[name].annotations.open_world_hint is False
     destructive_tools = (
         "apply_categories",
         "add_note",
@@ -113,6 +120,9 @@ async def test_every_read_tool_returns_meta_and_display_amounts(demo):
             ("schedule_c_draft", {"year": 2026}),
             ("net_worth", {}),
             ("holdings", {}),
+            ("amazon_matches", {}),
+            ("receivables", {}),
+            ("books_vs_bank", {}),
             ("afford", {"amount": 2000}),
             ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]}),
             ("goal_progress", {}),

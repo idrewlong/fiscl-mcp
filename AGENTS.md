@@ -42,7 +42,7 @@ src/fiscl/
   importers/       core pipeline, csv_import (profiles), ofx, types
   sync/            read-only bank connectors (only package that may use the network):
     base.py          allowlisted no-redirect request helper, keychain helpers, mTLS, Connector protocol
-    simplefin.py · plaid.py · teller.py   one connector per provider (fixed route allowlists)
+    simplefin.py · plaid.py · teller.py · qbo.py   one connector per provider (fixed route allowlists; QBO sandbox-only with a query-text allowlist)
     connect.py       human-only localhost connect flow (`fiscl connect plaid|teller [--reconnect]`)
     connections.py   the `connections` table (provider, institution, hashed ref, status, Plaid cursor; never a token)
     registry.py      build connectors, sync_accounts, list_connections, forget

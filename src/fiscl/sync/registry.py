@@ -17,8 +17,8 @@ from ..config import Config
 from ..guard import GuardError, choice
 from ..importers.core import ImportResult, import_statements, post_import
 from ..installkey import KEY_MISSING_MESSAGE, KeyMissing, is_key_missing_error, require_usable_key
-from . import connections, plaid, simplefin
-from .base import PROVIDERS, Connector, SyncError
+from . import connections, plaid, qbo, simplefin
+from .base import PROVIDERS, RECORD_PROVIDERS, Connector, SyncError
 from .teller import TellerConnector, TellerItem
 
 MAX_FIRST_SYNC_DAYS = 90
@@ -44,7 +44,18 @@ def build_connector(provider: str, conn: sqlite3.Connection, cfg: Config, opener
         )
     if provider == "simplefin":
         return simplefin.SimpleFinConnector(cfg)
+    if provider == "qbo":  # a RecordConnector: driven by run_record_connector, not run_connector
+        return qbo.QboConnector(
+            cfg, [qbo.QboCompany(r["item_ref_hash"], r["institution"], r["cursor"]) for r in rows], opener
+        )
     raise SyncError("unknown provider")
+
+
+def run_record_connector(conn: sqlite3.Connection, cfg: Config, connector, today: date | None = None) -> dict:
+    """Run a provider that fills its own tables (QuickBooks). Nothing is imported as transactions."""
+    today = today or date.today()
+    out = connector.sync_records(conn, today)
+    return {"rows_added": 0, **out}
 
 
 def _digest(provider: str, start: date, end: date, statements) -> str:
@@ -117,9 +128,9 @@ def sync_accounts(
     if provider != "all" and provider not in connected:
         raise GuardError(f"{provider} isn't connected. The user can run `fiscl connect {provider}`.", code="not_found")
     targets = connected if provider == "all" else [provider]
-    if targets:
+    if any(p not in RECORD_PROVIDERS for p in targets):
         try:
-            require_usable_key(conn, cfg)  # before any network call or write
+            require_usable_key(conn, cfg)  # before any network call or write (bank rows are keyed by account hash)
         except KeyMissing as exc:
             raise GuardError(str(exc), code="key_missing") from exc
     results: dict[str, dict] = {}
@@ -130,6 +141,8 @@ def sync_accounts(
                 out = simplefin.sync(conn, cfg, days=days, today=today)
                 connections.add_connection(conn, "simplefin", "SimpleFIN Bridge", SIMPLEFIN_REF)
                 connections.mark_synced(conn, "simplefin", SIMPLEFIN_REF)
+            elif p in RECORD_PROVIDERS:
+                out = run_record_connector(conn, cfg, build_connector(p, conn, cfg, opener), today)
             else:
                 out = run_connector(conn, cfg, build_connector(p, conn, cfg, opener), days, today)
             results[p] = out
@@ -185,7 +198,8 @@ def list_connections(conn: sqlite3.Connection, cfg: Config, today: date | None =
     present = {r["provider"] for r in rows}
     note = (
         "Connections are made by the user in a terminal: `fiscl connect simplefin|plaid|teller` "
-        "(Teller only for users who already have access). File import needs no connection."
+        "(Teller only for users who already have access). File import needs no connection. "
+        "`fiscl connect qbo` links the user's QuickBooks Online books (read-only, sandbox only for now)."
     )
     return {
         "connections": out,
@@ -215,6 +229,11 @@ def forget(conn: sqlite3.Connection, cfg: Config, provider: str, institution: st
         connector.forget()  # raises (keeping the token) if Plaid couldn't be told
         if institution is None:
             plaid.forget_app_credentials()
+    elif provider == "qbo":
+        connector = build_connector(provider, conn, cfg, opener, institution)
+        connector.forget()  # raises (keeping the token) if Intuit couldn't be told
+        if institution is None:
+            qbo.forget_app_credentials()
     connections.delete_rows(conn, provider, [r["item_ref_hash"] for r in rows])
     conn.commit()
     return len(rows)

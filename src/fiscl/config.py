@@ -69,6 +69,8 @@ class DebtTerms:
 
 TELLER_ENVIRONMENTS = ("development", "sandbox", "production")
 PLAID_ENVIRONMENTS = ("sandbox", "production")  # Plaid has no "development" host any more
+QBO_ENVIRONMENTS = ("sandbox", "production")  # accepted in config; the connector refuses "production" (see sync/qbo.py)
+QBO_ACCOUNTING_METHODS = ("cash", "accrual")
 
 
 @dataclass
@@ -84,6 +86,9 @@ class Config:
     debts: dict[str, DebtTerms] = field(default_factory=dict)
     teller_environment: str = "development"  # [connectors.teller] environment
     plaid_environment: str = "sandbox"  # [connectors.plaid] environment
+    qbo_environment: str = "sandbox"  # [connectors.qbo] environment (production is refused by the connector)
+    qbo_redirect_port: int = 8765  # [connectors.qbo] redirect_port: the fixed port of the registered redirect URI
+    qbo_accounting_method: str = "cash"  # [connectors.qbo] accounting_method: P&L basis, cash | accrual
     qif_date_order: str = "mdy"  # [import] qif_date_order: how to read ambiguous QIF dates (mdy | dmy)
     fx_max_rate_age_days: int = 7  # [fx] max_rate_age_days: how stale a rate may be for a transaction's date (1-31)
 
@@ -158,6 +163,14 @@ qif_date_order = "mdy"
 # Exchange rates come only from you (`set_fx_rate`, `fiscl fx import`); fiscl never looks them up. A transaction in
 # another currency uses the latest rate dated on or before it, if that rate is at most this many days older.
 max_rate_age_days = 7
+
+# QuickBooks Online (read-only; `fiscl connect qbo`). Sandbox only for now: "production" is refused until a human has
+# verified Intuit's production requirements. redirect_port must match the redirect URI registered in your Intuit app:
+# http://localhost:<port>/qbo/callback
+# [connectors.qbo]
+# environment = "sandbox"
+# redirect_port = 8765
+# accounting_method = "cash"   # or "accrual": the basis of the profit-and-loss report fiscl reads
 
 [transfers]
 window_days = 3
@@ -405,6 +418,14 @@ def load_config(home: Path | None = None) -> Config:
     plaid_env = (raw.get("connectors", {}).get("plaid", {}) or {}).get("environment", "sandbox")
     if plaid_env not in PLAID_ENVIRONMENTS:
         raise ConfigError(f"connectors.plaid.environment must be one of {', '.join(PLAID_ENVIRONMENTS)}")
+    qbo_raw = raw.get("connectors", {}).get("qbo", {}) or {}
+    qbo_env = qbo_raw.get("environment", "sandbox")
+    if qbo_env not in QBO_ENVIRONMENTS:
+        raise ConfigError(f"connectors.qbo.environment must be one of {', '.join(QBO_ENVIRONMENTS)}")
+    qbo_method = qbo_raw.get("accounting_method", "cash")
+    if qbo_method not in QBO_ACCOUNTING_METHODS:
+        raise ConfigError(f"connectors.qbo.accounting_method must be one of {', '.join(QBO_ACCOUNTING_METHODS)}")
+    qbo_port = _int(qbo_raw, "redirect_port", 8765, 1024, 65535, "connectors.qbo")
     qif_date_order = (raw.get("import", {}) or {}).get("qif_date_order", "mdy")
     if qif_date_order not in ("mdy", "dmy"):
         raise ConfigError("import.qif_date_order must be mdy or dmy")
@@ -415,6 +436,9 @@ def load_config(home: Path | None = None) -> Config:
         tax=tax,
         teller_environment=teller_env,
         plaid_environment=plaid_env,
+        qbo_environment=qbo_env,
+        qbo_redirect_port=qbo_port,
+        qbo_accounting_method=qbo_method,
         debts=_load_debts(raw.get("debts", {}), currency.upper()),
         currency=currency.upper(),
         timezone=str(raw.get("timezone", "America/Chicago")),

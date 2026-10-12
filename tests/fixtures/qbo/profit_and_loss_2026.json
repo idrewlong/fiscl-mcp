@@ -1,0 +1,41 @@
+{
+  "Header": {
+    "Time": "2026-10-12T09:00:00-05:00", "ReportName": "ProfitAndLoss", "DateMacro": "this year-to-date",
+    "ReportBasis": "Cash", "StartPeriod": "2026-01-01", "EndPeriod": "2026-10-12", "Currency": "USD"
+  },
+  "Columns": {"Column": [{"ColTitle": "", "ColType": "Account"}, {"ColTitle": "Total", "ColType": "Money"}]},
+  "Rows": {
+    "Row": [
+      {
+        "group": "Income", "type": "Section",
+        "Header": {"ColData": [{"value": "Income"}, {"value": ""}]},
+        "Rows": {"Row": [{"type": "Data", "ColData": [{"value": "Services"}, {"value": "60000.00"}]}]},
+        "Summary": {"ColData": [{"value": "Total Income"}, {"value": "60000.00"}]}
+      },
+      {
+        "group": "COGS", "type": "Section",
+        "Header": {"ColData": [{"value": "Cost of Goods Sold"}, {"value": ""}]},
+        "Rows": {"Row": [{"type": "Data", "ColData": [{"value": "Materials"}, {"value": "5000.00"}]}]},
+        "Summary": {"ColData": [{"value": "Total Cost of Goods Sold"}, {"value": "5000.00"}]}
+      },
+      {
+        "group": "GrossProfit", "type": "Section",
+        "Summary": {"ColData": [{"value": "Gross Profit"}, {"value": "55000.00"}]}
+      },
+      {
+        "group": "Expenses", "type": "Section",
+        "Header": {"ColData": [{"value": "Expenses"}, {"value": ""}]},
+        "Rows": {"Row": [{"type": "Data", "ColData": [{"value": "Supplies"}, {"value": "12345.67"}]}]},
+        "Summary": {"ColData": [{"value": "Total Expenses"}, {"value": "12345.67"}]}
+      },
+      {
+        "group": "NetOperatingIncome", "type": "Section",
+        "Summary": {"ColData": [{"value": "Net Operating Income"}, {"value": "42654.33"}]}
+      },
+      {
+        "group": "NetIncome", "type": "Section",
+        "Summary": {"ColData": [{"value": "Net Income"}, {"value": "42654.33"}]}
+      }
+    ]
+  }
+}

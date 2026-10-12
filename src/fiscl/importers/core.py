@@ -311,7 +311,7 @@ def import_file(
     qif_date: str | None = None,
     as_of: str | None = None,
 ) -> ImportResult:
-    from . import holdings
+    from . import amazon, holdings
 
     path = Path(path)
     result = ImportResult(filename=path.name, status="ok")
@@ -323,6 +323,9 @@ def import_file(
     fmt = path.suffix.lstrip(".").lower()
     try:
         text = read_import_text(path)
+        # Amazon's order history is detected by its header set; an explicit --profile always means a bank/holdings CSV.
+        if profile is None and path.suffix.lower() == ".csv" and amazon.looks_like_amazon(text):
+            return amazon.import_items(conn, cfg, text, path.name, digest, result, dry_run)
         holdings_profile = holdings.find_profile(text, cfg, profile)
         if holdings_profile is None:
             statements = parse_text(text, path, cfg, profile, qif_date)

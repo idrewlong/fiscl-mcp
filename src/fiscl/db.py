@@ -356,6 +356,73 @@ MIGRATIONS: list[str] = [
            COALESCE(s.business_id, t.business_id), s.amount, t.currency
       FROM splits s JOIN transactions t ON t.id = s.transaction_id;
     """,
+    # 11 — v2 phase 4: Amazon order-history items from the user's own export. They are not transactions: they only
+    # feed amazon_matches, which proposes splits for card charges. `total` is minor units, positive, as exported
+    # (whether it includes tax, shipping or discounts is unverified). Down: DROP TABLE amazon_items;
+    """
+    CREATE TABLE amazon_items (
+        id         INTEGER PRIMARY KEY,
+        order_id   TEXT NOT NULL,
+        order_date TEXT NOT NULL,
+        ship_date  TEXT,
+        name       TEXT NOT NULL,
+        quantity   INTEGER NOT NULL DEFAULT 1,
+        total      INTEGER NOT NULL CHECK (total > 0),
+        currency   TEXT NOT NULL,
+        import_id  INTEGER REFERENCES imports(id),
+        dedupe_key TEXT NOT NULL UNIQUE
+    );
+    CREATE INDEX ix_amazon_ship ON amazon_items(ship_date);
+    CREATE INDEX ix_amazon_order ON amazon_items(order_id);
+    """,
+    # 12 — v2 phase 4: QuickBooks Online read-only mirror (sandbox only for now). Tokens, the client secret and the
+    # realm id live only in the OS keychain. SQLite can't alter a CHECK, so `connections` is rebuilt to allow 'qbo'
+    # (nothing references it yet; row ids are preserved). Deleting a connection cascades to its qbo_* rows: unlike
+    # bank transactions the mirror is disposable. Down: DROP TABLE qbo_reports; DROP TABLE qbo_invoices; then rebuild
+    # `connections` with the provider CHECK from migration 4 (and the cursor column from 5).
+    """
+    CREATE TABLE connections_new (
+        id            INTEGER PRIMARY KEY,
+        provider      TEXT NOT NULL CHECK (provider IN ('simplefin','teller','plaid','qbo')),
+        institution   TEXT,
+        item_ref_hash TEXT NOT NULL,
+        created_at    TEXT NOT NULL,
+        last_sync_at  TEXT,
+        status        TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','needs_reauth','error')),
+        cursor        TEXT,
+        UNIQUE (provider, item_ref_hash)
+    );
+    INSERT INTO connections_new (id, provider, institution, item_ref_hash, created_at, last_sync_at, status, cursor)
+        SELECT id, provider, institution, item_ref_hash, created_at, last_sync_at, status, cursor FROM connections;
+    DROP TABLE connections;
+    ALTER TABLE connections_new RENAME TO connections;
+
+    CREATE TABLE qbo_invoices (
+        connection_id INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+        qbo_id        TEXT NOT NULL,
+        doc_number    TEXT,
+        customer      TEXT,
+        txn_date      TEXT NOT NULL,
+        due_date      TEXT,
+        total         INTEGER NOT NULL,
+        balance       INTEGER NOT NULL,
+        currency      TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (connection_id, qbo_id)
+    );
+    CREATE TABLE qbo_reports (
+        connection_id  INTEGER NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+        report         TEXT NOT NULL CHECK (report IN ('profit_and_loss')),
+        period_start   TEXT NOT NULL,
+        period_end     TEXT NOT NULL,
+        basis          TEXT NOT NULL CHECK (basis IN ('cash','accrual')),
+        total_income   INTEGER,
+        total_expenses INTEGER,
+        net_income     INTEGER,
+        fetched_at     TEXT NOT NULL,
+        PRIMARY KEY (connection_id, report, period_start, period_end, basis)
+    );
+    """,
 ]
 
 

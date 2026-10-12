@@ -94,6 +94,9 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "manage_business": {"action": "add", "name": "Consulting"},
     "list_businesses": {},
     "list_connections": {},
+    "amazon_matches": {},
+    "receivables": {},
+    "books_vs_bank": {},
 }
 
 

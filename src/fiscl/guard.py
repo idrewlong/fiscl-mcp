@@ -180,7 +180,7 @@ _AUDIT_SAFE_KEYS = {
 # Enum-like keys are logged verbatim only when the value is one of the known choices; free text that was
 # (mis)passed in one of these slots is logged as "<invalid>", never as written.
 _AUDIT_ENUMS: dict[str, frozenset[str]] = {
-    "provider": frozenset({"all", "simplefin", "teller", "plaid"}),
+    "provider": frozenset({"all", "simplefin", "teller", "plaid", "qbo"}),
     "group_by": frozenset({"category", "merchant", "account", "month", "position", "asset_class"}),
     "compare_to": frozenset({"previous_period", "same_period_last_year", "none"}),
     "interval": frozenset({"month", "week"}),

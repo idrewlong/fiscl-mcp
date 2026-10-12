@@ -17,6 +17,7 @@ import contextlib
 import os
 import re
 import shutil
+import sqlite3
 import ssl
 import tempfile
 import urllib.error
@@ -29,7 +30,8 @@ from typing import Any, Protocol
 
 from ..importers.types import ParsedStatement
 
-PROVIDERS = ("simplefin", "teller", "plaid")
+PROVIDERS = ("simplefin", "teller", "plaid", "qbo")
+RECORD_PROVIDERS = ("qbo",)  # providers that sync records into their own tables, not bank transactions
 KEYRING_SERVICE = "fiscl"
 TIMEOUT = 30
 MAX_RESPONSE_BYTES = 25 * 1024 * 1024
@@ -38,10 +40,17 @@ MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 class SyncError(RuntimeError):
     """A connector problem whose message is safe to show (no tokens, names, or amounts)."""
 
-    def __init__(self, message: str, status: int | None = None, body: bytes | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        body: bytes | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.body = body  # provider error payload (capped); for connectors to read a code, never to display
+        self.retry_after = retry_after  # seconds, from a Retry-After header on an error response
 
 
 # --- HTTP -----------------------------------------------------------------------------------
@@ -94,6 +103,9 @@ class Policy:
     hosts: tuple[str, ...]
     routes: tuple[tuple[str, str], ...]
     allow_userinfo: bool = False  # SimpleFIN access URLs embed credentials; nothing else may
+    # Optional extra gate on the request itself: called as (method, path, raw query string) after the route matches,
+    # and raises SyncError to refuse. QuickBooks uses it to allow only fixed query shapes on its GET routes.
+    query_check: Callable[[str, str, str], None] | None = None
 
     def check(self, method: str, url: str) -> urllib.parse.SplitResult:
         parts = urllib.parse.urlsplit(url)
@@ -112,6 +124,10 @@ class Policy:
             raise SyncError(f"{self.label} URLs must not carry credentials")
         if not any(m == method.upper() and re.fullmatch(rx, parts.path) for m, rx in self.routes):
             raise SyncError(f"{self.label} request {method.upper()} on that path is not allowed (read-only connector)")
+        if self.query_check is not None:
+            if parts.fragment:
+                raise SyncError(f"{self.label} URLs must not carry a fragment")
+            self.query_check(method.upper(), parts.path, parts.query)
         return parts
 
 
@@ -120,6 +136,16 @@ def _error_body(exc: urllib.error.HTTPError) -> bytes | None:
         return exc.read(65536)
     except Exception:
         return None
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    """Seconds from a numeric Retry-After header (the HTTP-date form is ignored), or None."""
+    try:
+        value = exc.headers.get("Retry-After") if exc.headers is not None else None
+        seconds = float(value) if value is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return seconds if seconds is not None and 0 <= seconds < 3600 else None
 
 
 def request(
@@ -152,7 +178,9 @@ def request(
                 f"{policy.label} answered with a redirect (HTTP {exc.code}); fiscl doesn't follow redirects",
                 exc.code,
             ) from exc
-        raise SyncError(f"{policy.label} returned HTTP {exc.code}", exc.code, _error_body(exc)) from exc
+        raise SyncError(
+            f"{policy.label} returned HTTP {exc.code}", exc.code, _error_body(exc), _retry_after(exc)
+        ) from exc
     except urllib.error.URLError as exc:
         raise SyncError(f"couldn't reach {policy.label}: {exc.reason}") from exc
     except TimeoutError as exc:
@@ -301,5 +329,18 @@ class Connector(Protocol):
     warnings: list[str]
 
     def fetch(self, start: date, end: date) -> list[ParsedStatement]: ...
+
+    def forget(self) -> None: ...
+
+
+class RecordConnector(Protocol):
+    """A provider whose data is not bank transactions (QuickBooks invoices and reports). Importing it as
+    transactions would double count deposits, so it writes only its own tables. `sync_records` runs inside the
+    caller's connection, returns a small summary dict, and records per-connection status itself."""
+
+    provider: str
+    warnings: list[str]
+
+    def sync_records(self, conn: sqlite3.Connection, today: date) -> dict: ...
 
     def forget(self) -> None: ...

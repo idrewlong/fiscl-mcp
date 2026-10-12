@@ -77,3 +77,7 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - Rates come only from `set_fx_rate` or `fiscl fx import`; there is never a network lookup. SQL triggers keep home-currency rows at `amount_home = amount` for every writer.
 - Balances, transfer matching, dedupe and rule amount conditions stay in native currency. Transfers between accounts in different currencies won't auto-match (known limitation).
 - Changing `config.currency` needs `fiscl fx refresh`; tools and `doctor` warn until then.
+
+## 2026-10-12 — Amazon matching and QBO connector details (Phase 4)
+- Amazon: imported from the user's order-history CSV (detected by header); `amazon_matches` proposes `split_transaction` args by exact shipment, then exact order total, with a ±1¢/item fallback reported as `rounding_adjustment`. Only `description_regex` rules categorize items (merchant rules would put everything in one category). Never auto-applied. Amount semantics are unverified until a real export is checked.
+- QBO: `http://localhost:<redirect_port>/qbo/callback`. No PKCE (Intuit doesn't document it), so state is compared in constant time. The access token is never stored. A rotated refresh token is written to the keychain before use. 429 → wait Retry-After (≤120 s), at most 3 retries. `Policy.query_check(method, path, raw_query)` validates the query text per route. Stdlib only, no `fiscl[qbo]` extra. Production stays refused.

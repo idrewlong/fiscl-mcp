@@ -302,6 +302,24 @@ def _ensure_plaid_credentials() -> None:
     )
 
 
+def _ensure_qbo_credentials() -> None:
+    """Collect the user's Intuit app Client ID and Client Secret with hidden input; they go only to the keychain."""
+    import getpass
+
+    from .sync import qbo
+
+    if qbo.has_app_credentials():
+        return
+    print(
+        "These are your own Intuit developer app's sandbox keys (developer.intuit.com > your app > Keys).",
+        file=sys.stderr,
+    )
+    qbo.store_app_credentials(
+        getpass.getpass("Intuit Client ID (hidden): ").strip(),
+        getpass.getpass("Intuit Client Secret (hidden): ").strip(),
+    )
+
+
 def cmd_connect(cfg, args) -> int:
     import getpass
 
@@ -342,6 +360,15 @@ def cmd_connect(cfg, args) -> int:
                         cfg, conn, announce=say, reconnect=args.reconnect, institution=args.institution
                     )
                 print("Connected. Ask your assistant to sync_accounts, or run `fiscl sync run`.")
+            elif args.target == "qbo":
+                from .sync import qbo
+
+                qbo.require_sandbox(cfg)  # before asking for any keys
+                say(f"Register this redirect URI in your Intuit app first: {qbo.redirect_uri(cfg.qbo_redirect_port)}")
+                _ensure_qbo_credentials()
+                with open_db(cfg) as conn:
+                    connect.connect_qbo(cfg, conn, announce=say, reconnect=args.reconnect, institution=args.institution)
+                print("Connected. Ask your assistant to call sync_accounts with provider qbo.")
             elif args.target == "simplefin":
                 say("Paste your SimpleFIN setup token (from https://beta-bridge.simplefin.org). Input is hidden.")
                 host = simplefin.claim(getpass.getpass("Setup token: "))
@@ -618,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, text in (
         ("plaid", "connect through Plaid Trial (free, 10 connections; needs your own Plaid developer account; beta)"),
         ("teller", "connect through Teller (only if you already have Teller access; no public signup; beta)"),
+        ("qbo", "connect your QuickBooks Online books read-only (sandbox only for now; needs your own Intuit app)"),
     ):
         x = a.add_parser(name, help=text)
         x.add_argument(
@@ -628,7 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
         x.add_argument("--institution", help="with --reconnect: which connection, if several need it")
     a.add_parser("list", help="show connected banks (no secrets)")
     x = a.add_parser("forget", help="revoke access and delete the stored credentials")
-    x.add_argument("provider", choices=("simplefin", "teller", "plaid"))
+    x.add_argument("provider", choices=("simplefin", "teller", "plaid", "qbo"))
     x.add_argument("--institution", help="only this institution")
     s.set_defaults(fn=cmd_connect)
 

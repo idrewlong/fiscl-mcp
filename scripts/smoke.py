@@ -125,6 +125,13 @@ async def run(home: Path) -> Smoke:
             # no rates in the demo: empty state, never a rate lookup
             ("list_fx_rates", {}),
             ("list_fx_rates", {"currency": "EUR", "start_date": START, "limit": 5}),
+            # no Amazon history or QuickBooks in the demo: empty states, never a network call
+            ("amazon_matches", {}),
+            ("amazon_matches", {"start_date": START, "include_ambiguous": False, "limit": 5}),
+            ("receivables", {}),
+            ("receivables", {"customer": "Acme", "limit": 5}),
+            ("books_vs_bank", {}),
+            ("books_vs_bank", {"year": date.today().year - 1}),
             ("afford", {"amount": 500}),
             ("afford", {"amount": 25, "recurring_monthly": True, "buffer": 100}),
             ("debt_payoff", {"extra_monthly": 50, "debts": debts}),
@@ -221,6 +228,10 @@ async def run(home: Path) -> Smoke:
             # not connected in a fresh demo home; must fail cleanly, not reach the network
             ("sync_accounts", {"provider": "teller"}),
             ("sync_accounts", {"provider": "plaid"}),
+            ("sync_accounts", {"provider": "qbo"}),
+            ("amazon_matches", {"start_date": "yesterday"}),
+            ("receivables", {"as_of": "soon"}),
+            ("books_vs_bank", {"year": 1800}),
             ("sync_accounts", {"provider": "bogus"}),
         ]
         for tool, args in bad:

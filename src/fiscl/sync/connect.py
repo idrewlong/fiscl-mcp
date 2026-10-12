@@ -13,14 +13,16 @@ import json
 import re
 import secrets
 import sqlite3
+import sys
 import time
+import urllib.parse
 import webbrowser
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..config import Config
 from ..guard import clean_text
-from . import base, connections, plaid, teller
+from . import base, connections, plaid, qbo, teller
 from .base import SyncError
 
 TIMEOUT_SECONDS = 600
@@ -328,7 +330,7 @@ def save_teller_enrollment(conn: sqlite3.Connection, data: dict, revoke: Callabl
 def _pick_reauth(conn: sqlite3.Connection, provider: str, institution: str | None):
     """The one connection that needs re-authorization (optionally narrowed by --institution)."""
     rows = [r for r in connections.list_rows(conn, provider, institution) if r["status"] == "needs_reauth"]
-    label = provider.title()
+    label = "QuickBooks" if provider == "qbo" else provider.title()
     if not rows:
         raise SyncError(f"no {label} connection needs re-authorization; run `fiscl connect list` to check")
     if len(rows) > 1:
@@ -536,3 +538,183 @@ def connect_plaid(
     )
     run_flow(server, f"Plaid {cfg.plaid_environment}", open_browser, timeout, announce)
     return "plaid"
+
+
+# --- QuickBooks Online (OAuth redirect) ----------------------------------------------------------------
+# Intuit redirects the browser to a registered URI, so this flow cannot use a random port or a secret URL path:
+# a one-shot server on the fixed `redirect_port` answers GET /qbo/callback exactly once. What authenticates the
+# answer is the random OAuth `state` (compared in constant time) plus the client secret used in the code exchange.
+
+CALLBACK_PATH = "/qbo/callback"
+_CALLBACK_CSP = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+_PAGE_OK = b"<!doctype html><meta charset=utf-8><title>fiscl</title><p>QuickBooks is connected. You can close this tab."
+_PAGE_FAILED = b"<!doctype html><meta charset=utf-8><title>fiscl</title><p>Nothing was saved. See the terminal."
+_CODE = re.compile(r"[A-Za-z0-9\-_.~]{1,512}")
+
+
+class OAuthCallbackServer(HTTPServer):
+    # The port is fixed, so a second `fiscl connect qbo` a minute after the first would hit TIME_WAIT. On POSIX,
+    # SO_REUSEADDR only skips TIME_WAIT (it never lets a second listener share a live port); on Windows it would, so
+    # it stays off there.
+    allow_reuse_address = sys.platform != "win32"
+
+    def __init__(self, port: int, state: str, on_callback: Callable[[str, str], object]):
+        try:
+            super().__init__((BIND_HOST, port), _CallbackHandler)
+        except OSError as exc:
+            raise SyncError(
+                f"port {port} is busy: free it, or change redirect_port under [connectors.qbo] "
+                "(and the redirect URI in your Intuit app to match)"
+            ) from exc
+        self.state = state
+        self.on_callback = on_callback  # (code, realm id) -> the saved company name
+        self.consumed = False
+        self.result: object = None
+        self.error: str | None = None
+        self.deadline: float | None = None
+        self.timeout = 0.5
+
+
+def make_oauth_server(port: int, state: str, on_callback: Callable[[str, str], object]) -> OAuthCallbackServer:
+    """The server factory for the OAuth redirect. It can only ever bind to 127.0.0.1."""
+    return OAuthCallbackServer(port, state, on_callback)
+
+
+class _CallbackHandler(_Handler):
+    server: OAuthCallbackServer  # type: ignore[assignment]
+
+    def _page(self, code: int, body: bytes):
+        self._send(code, body, "text/html; charset=utf-8", {"Content-Security-Policy": _CALLBACK_CSP})
+
+    def do_GET(self):
+        port = self.server.server_port
+        # DNS-rebinding defence: the Host header must be exactly the registered loopback name and our port, and a
+        # request that names some other Origin (a page elsewhere poking at localhost) is not ours to answer.
+        if self.headers.get("Host") not in (f"localhost:{port}", f"{BIND_HOST}:{port}"):
+            return self._send(404, b"not found")
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in (f"http://localhost:{port}", f"http://{BIND_HOST}:{port}"):
+            return self._send(404, b"not found")
+        parts = urllib.parse.urlsplit(self.path)
+        if parts.path != CALLBACK_PATH:
+            return self._send(404, b"not found")
+        if self.server.consumed:
+            return self._send(409, b"already used")
+        self.server.consumed = True  # exactly one request reaches the callback logic, whatever it contains
+        query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+
+        def one(key: str) -> str | None:
+            values = query.get(key)
+            return values[0] if values and len(values) == 1 else None
+
+        state = one("state")
+        if state is None or not hmac.compare_digest(state.encode(), self.server.state.encode()):
+            self.server.error = "QuickBooks' answer didn't match this connection attempt; nothing was saved"
+            return self._page(400, _PAGE_FAILED)
+        if one("error") is not None:
+            self.server.error = "QuickBooks reported that access wasn't approved; nothing was saved"
+            return self._page(400, _PAGE_FAILED)
+        code, realm = one("code"), one("realmId")
+        if not (code and _CODE.fullmatch(code) and realm):
+            self.server.error = "QuickBooks' answer was missing its code or company; nothing was saved"
+            return self._page(400, _PAGE_FAILED)
+        try:
+            self.server.result = self.server.on_callback(code, realm)
+        except SyncError as exc:
+            self.server.error = str(exc)
+            return self._page(400, _PAGE_FAILED)
+        except Exception:  # a bug or a full disk must not look like success
+            self.server.error = "fiscl couldn't save the connection; see the terminal"
+            return self._page(500, _PAGE_FAILED)
+        self._page(200, _PAGE_OK)
+
+    do_POST = _Handler._nope
+
+
+def best_effort(action: Callable[[], object]) -> None:
+    try:
+        action()
+    except Exception:  # noqa: S110 - the original failure is the story
+        pass
+
+
+def save_qbo_connection(
+    conn: sqlite3.Connection,
+    http: qbo.Http,
+    client_id: str,
+    secret: str,
+    code: str,
+    realm_id: str,
+    redirect: str,
+    reconnect_row: sqlite3.Row | None = None,
+) -> str:
+    """Exchange the code, prove the grant works by reading the company name, then store the refresh token and the
+    company id in the keychain and record the connection. On any failure after tokens were issued the grant is
+    revoked (a new connection) or the keychain put back as it was, so nothing live is left untracked."""
+    qbo.check_realm(realm_id)
+    access, refresh = qbo.exchange_code(http, client_id, secret, code, redirect)
+
+    def revoke() -> None:
+        qbo.revoke_token(http, client_id, secret, refresh)
+
+    ref = connections.item_ref_hash("qbo", realm_id)
+    try:
+        if reconnect_row is not None and reconnect_row["item_ref_hash"] != ref:
+            raise SyncError("QuickBooks returned a different company than the one being reconnected; nothing changed")
+        company = qbo.Client(realm_id, qbo.Session(ref, client_id, secret, http, access), http).company_name()
+    except Exception:
+        best_effort(revoke)  # a grant fiscl won't keep must not be left live
+        raise
+    realm_name = qbo.realm_secret_name(ref)
+    previous_realm = base.secret_get(realm_name)
+    try:
+        base.secret_set(realm_name, realm_id)
+        _store_then_record(conn, "qbo", ref, refresh, company, revoke)
+    except Exception:
+        best_effort(
+            (lambda: base.secret_set(realm_name, previous_realm))
+            if previous_realm is not None
+            else (lambda: base.secret_delete(realm_name))
+        )
+        raise
+    return company
+
+
+def connect_qbo(
+    cfg: Config,
+    conn: sqlite3.Connection,
+    open_browser: Callable[[str], object] = webbrowser.open,
+    timeout: float = TIMEOUT_SECONDS,
+    announce: Callable[[str], None] = lambda msg: None,
+    opener=None,
+    reconnect: bool = False,
+    institution: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Run the whole flow. The Intuit app keys must already be in the keychain; the CLI collects them first.
+    Sandbox only: production is refused before anything is opened. With `reconnect`, re-authorize the one
+    connection that needs it and refuse a different company."""
+    base.keyring_backend()  # no keychain, no connection
+    qbo.require_sandbox(cfg)
+    client_id, secret = qbo.load_app_credentials()
+    row = _pick_reauth(conn, "qbo", institution) if reconnect else None
+    http = qbo.Http(opener, sleep)
+    redirect = qbo.redirect_uri(cfg.qbo_redirect_port)
+    state = secrets.token_urlsafe(32)
+    server = make_oauth_server(
+        cfg.qbo_redirect_port,
+        state,
+        lambda code, realm: save_qbo_connection(conn, http, client_id, secret, code, realm, redirect, row),
+    )
+    url = qbo.authorize_url(client_id, redirect, state)
+    try:
+        announce("Opening your browser to connect QuickBooks (sandbox). Waiting up to 10 minutes...")
+        if not open_browser(url):
+            announce(f"Open this link in your browser: {url}")
+    except BaseException:
+        server.server_close()
+        raise
+    serve_once(server, timeout)
+    if isinstance(server.result, str) and server.result:
+        announce(f"Saved a connection to the QuickBooks company: {server.result}.")
+    return "qbo"

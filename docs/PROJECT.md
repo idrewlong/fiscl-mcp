@@ -436,8 +436,8 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 
 **Data**
 - [x] Teller and Plaid connectors (bring your own keys, read-only; human live checks pending, see DECISIONS)
-- [ ] **QuickBooks Online read-only** (invoices, A/R, P&L)
-- [ ] Amazon order-history splitting
+- [x] **QuickBooks Online read-only** (invoices, A/R, P&L) — sandbox only; production refused pending human check
+- [x] Amazon order-history matching (proposes splits; never auto-applies)
 - [x] Holdings import (generic profile; Fidelity/Schwab/Vanguard/crypto built-ins pending owner header samples)
 - [x] QIF
 - [x] Multi-currency with FX snapshots (manual/CSV rates only; 7-day rule)

@@ -38,6 +38,12 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 
 `export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions. Exports are scrubbed like tool responses: card numbers (Luhn-checked), SSNs, and long account-like numbers in text cells are masked in CSV and Markdown (so 9+ digit invoice numbers in notes are masked too); amounts are untouched. Files are published with a hard link so a name that appears at the last moment is never overwritten.
 
+## QuickBooks Online (sandbox only, beta)
+
+The QuickBooks connector is read-only in code: GET-only routes on Intuit's sandbox API host, plus POST only to the token and revoke endpoints. The query text must match a fixed `SELECT * FROM Invoice|Customer|Payment` shape, and the source scan rejects write endpoints. Intuit has no read-only OAuth scope, so the stored refresh token could write to your books if someone stole it from your keychain; fiscl's code cannot. Only the refresh token and company id are stored, both in the OS keychain; access tokens live in memory only. Production companies are refused until a human verifies Intuit's production process. `fiscl connect forget qbo` revokes at Intuit first and deletes the mirrored invoices.
+
+Amazon order history is imported from the file you download. fiscl never logs in to Amazon.
+
 ## Holdings
 
 Positions files are parsed locally. There are no price or FX lookups: prices come only from your imports, and exchange rates are only ones you type (`set_fx_rate`) or import (`fiscl fx import`). Full account numbers in broker files are never stored: the column is ignored by default, or cut to the last 4 digits only to choose the matching fiscl account.

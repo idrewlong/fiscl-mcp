@@ -509,7 +509,7 @@ def test_sec9_reference_url_exemption_is_exact_and_single_file():
 
 
 def test_sec9_policy_is_only_constructed_by_the_connector_modules():
-    allowed = {"sync/teller.py", "sync/plaid.py", "sync/simplefin.py"}
+    allowed = {"sync/teller.py", "sync/plaid.py", "sync/simplefin.py", "sync/qbo.py"}
     built = set()
     for rel, tree in _src_trees():
         for node in ast.walk(tree):
@@ -590,7 +590,8 @@ def test_sec9_every_base_request_call_passes_a_module_level_policy():
                 or (isinstance(first, ast.Call) and getattr(first.func, "id", "") in ("_policy", "policy_for"))
             )
             assert ok, f"{rel}:{node.lineno} passes something other than a connector policy"
-    assert calls == 4  # teller, plaid, simplefin claim + fetch: a new call site must be reviewed here
+    # teller, plaid, simplefin claim + fetch, and qbo's single Http.send: a new call site must be reviewed here
+    assert calls == 5
 
 
 # ---------------------------------------------------------------------------------------------------

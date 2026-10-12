@@ -259,7 +259,7 @@ def test_sync_all_skips_unconnected_and_reports_failures(cfg, conn, connected):
     api = FakeTeller(fail={("GET", "/accounts"): 403})
     out = registry.sync_accounts(conn, cfg, provider="all", today=TODAY, opener=api)
     assert out["results"] == {} and [e["provider"] for e in out["errors"]] == ["teller"]
-    assert {s["provider"] for s in out["skipped"]} == {"simplefin", "plaid"}
+    assert {s["provider"] for s in out["skipped"]} == {"simplefin", "plaid", "qbo"}
     assert connections.list_rows(conn, "teller")[0]["status"] == "needs_reauth"
 
 
@@ -281,7 +281,7 @@ def test_list_connections_has_no_tokens(cfg, conn, connected):
     (c,) = out["connections"]
     assert c["provider"] == "teller" and c["institution"] == "Gulf Bank" and c["status"] == "ok"
     assert sorted(c["accounts"]) == ["Gulf Bank Everyday Checking ••1234", "Gulf Bank Rewards Visa ••9876"]
-    assert out["not_connected"] == ["simplefin", "plaid"]
+    assert out["not_connected"] == ["simplefin", "plaid", "qbo"]
     assert TOKEN not in json.dumps(out)
 
 
