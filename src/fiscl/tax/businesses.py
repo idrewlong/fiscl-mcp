@@ -12,9 +12,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime
 
+from ..categorize import rules_naming_business
 from ..common import meta, plan_result, with_meta, year_bounds
 from ..config import Config
-from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, SCOPE_SQL, SPENDING_FILTER, TXN_FROM
+from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, INCOME_FILTER, SCOPE_SQL, SPENDING_FILTER, TXN_FROM
 from ..guard import GuardError, choice, clean_text
 from ..money import amount
 from .lines import DISCLAIMER
@@ -100,6 +101,12 @@ def manage_business(conn, cfg: Config, action=None, name=None, new_name=None, dr
             change["id"] = conn.execute("SELECT id FROM businesses WHERE name = ?", (name,)).fetchone()[0]
     else:
         row = get_business(conn, name)
+        # Every import and sync resolves rule businesses by name, so a rename or archive would break them all.
+        named_by = rules_naming_business(cfg, row["name"])
+        if named_by:
+            raise GuardError(
+                f"rules.toml rule {named_by[0]} names this business; change the rule first", code="invalid"
+            )
         if action == "rename":
             if new_name is None:
                 raise GuardError("new_name is required to rename a business", code="needs_terms")
@@ -137,9 +144,7 @@ def list_businesses(conn, cfg: Config, year=None, today=None) -> dict:
         r["b"]: r["g"]
         for r in conn.execute(
             f"""SELECT {BUSINESS_SQL} AS b, SUM(t.amount) AS g FROM {TXN_FROM}
-                WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business'
-                  AND t.transfer_group IS NULL AND t.amount > 0
-                  AND COALESCE(c.kind, 'income') NOT IN ('transfer', 'ignore', 'expense')
+                WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' AND {INCOME_FILTER}
                 GROUP BY b""",
             span,
         )

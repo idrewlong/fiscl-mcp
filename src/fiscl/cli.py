@@ -386,7 +386,7 @@ def cmd_backup(cfg, args) -> int:
 
 def cmd_doctor(cfg, args) -> int:
     from .analysis import data_freshness
-    from .categorize import load_rules
+    from .categorize import inactive_rule_businesses, load_rules
 
     problems, fixed = [], []
     warnings = [w for w in (cloud_sync_warning(cfg.home), disk_encryption_warning()) if w]
@@ -408,12 +408,15 @@ def cmd_doctor(cfg, args) -> int:
         if path.is_file() and not path.is_symlink() and stat.S_IMODE(path.stat().st_mode) != FILE_MODE:
             os.chmod(path, FILE_MODE)
             fixed.append(f"permissions on {path}")
+    rules = []
     try:
-        load_rules(cfg)
+        rules = load_rules(cfg)
         load_budgets(cfg)
     except Exception as exc:
         problems.append(str(exc))
     with open_db(cfg) as conn:
+        for index in inactive_rule_businesses(conn, rules):
+            problems.append(f"rules.toml rule {index}: business isn't an active business")
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             problems.append(f"database integrity: {integrity}")

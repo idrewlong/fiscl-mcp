@@ -13,7 +13,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from ..common import meta, year_bounds
 from ..config import Config
-from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, SCOPE_SQL, SPENDING_FILTER, TXN_FROM
+from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, INCOME_FILTER, SCOPE_SQL, SPENDING_FILTER, TXN_FROM
 from ..money import amount
 from .businesses import business_view, businesses_for_period, get_business
 from .home_office import (
@@ -73,8 +73,7 @@ def _build(conn, cfg: Config, year: int, start: date, end: date, biz: sqlite3.Ro
     gross = conn.execute(
         f"""SELECT COALESCE(SUM(t.amount), 0) FROM {TXN_FROM}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {biz_sql}
-              AND t.transfer_group IS NULL AND t.amount > 0
-              AND COALESCE(c.kind, 'income') NOT IN ('transfer', 'ignore', 'expense')""",
+              AND {INCOME_FILTER}""",
         (*span, *biz_params),
     ).fetchone()[0]
     rows = conn.execute(

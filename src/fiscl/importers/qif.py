@@ -49,8 +49,13 @@ def _bad_date(index: int) -> QIFError:
     return QIFError(f"bad or missing date in QIF record {index}")
 
 
-def _year(raw: str) -> int:
-    return int(raw) if len(raw) == 4 else 2000 + int(raw)
+def _year(raw: str, now_year: int | None = None) -> int:
+    """A four-digit year as written. Two digits use a pivot: YY up to (current year % 100) + 1 means 20YY (a file
+    may run one year ahead), anything higher means 19YY, so pre-2000 files aren't shifted a century."""
+    if len(raw) == 4:
+        return int(raw)
+    yy = int(raw)
+    return (2000 if yy <= (now_year or date.today().year) % 100 + 1 else 1900) + yy
 
 
 def _parse_date(value: str, order: str, index: int) -> str:

@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from ..common import check_items, meta, money_arg, plan_result, valid_id, with_meta, year_bounds
 from ..config import Config
-from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, SCOPE_SQL, TXN_FROM
+from ..db import BUSINESS_SQL, DEFAULT_BUSINESS_ID, INCOME_FILTER, SCOPE_SQL, TXN_FROM
 from ..guard import GuardError, choice, clean_text
 from ..money import amount
 from ..normalize import normalize_merchant
@@ -317,8 +317,7 @@ def reconcile_1099(conn, cfg: Config, tax_year=None, today=None, business=None) 
     income = conn.execute(
         f"""SELECT t.merchant AS merchant, SUM(t.amount) AS total, COUNT(*) AS n FROM {TXN_FROM}
             WHERE t.posted_date BETWEEN ? AND ? AND {SCOPE_SQL} = 'business' {income_sql}
-              AND t.transfer_group IS NULL AND t.amount > 0
-              AND COALESCE(c.kind, 'income') NOT IN ('transfer', 'ignore', 'expense')
+              AND {INCOME_FILTER}
             GROUP BY t.merchant""",
         (start.isoformat(), end.isoformat(), *income_params),
     ).fetchall()

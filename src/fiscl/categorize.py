@@ -90,6 +90,26 @@ def resolve_businesses(conn: sqlite3.Connection, rules: list[Rule]) -> None:
         rule.business_id = row["id"]
 
 
+def rules_naming_business(cfg: Config, name: str) -> list[int]:
+    """Indexes of rules whose `business` is this name (case-insensitive)."""
+    wanted = clean_text(name, 1000).casefold()
+    return [r.index for r in load_rules(cfg) if r.business and clean_text(r.business, 1000).casefold() == wanted]
+
+
+def inactive_rule_businesses(conn: sqlite3.Connection, rules: list[Rule]) -> list[int]:
+    """Indexes of rules whose `business` is unknown or archived (what resolve_businesses would refuse)."""
+    bad = []
+    for rule in rules:
+        if rule.business is None:
+            continue
+        row = conn.execute(
+            "SELECT archived FROM businesses WHERE name = ?", (clean_text(rule.business, 1000),)
+        ).fetchone()
+        if row is None or row["archived"]:
+            bad.append(rule.index)
+    return bad
+
+
 def first_match(rules: list[Rule], txn: dict) -> Rule | None:
     return next((r for r in rules if r.matches(txn)), None)
 

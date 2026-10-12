@@ -23,9 +23,10 @@ STATE_BASE_NOTE = (
 
 
 def due_dates(year: int) -> list[str]:
-    """The four 1040-ES dates for tax year `year`, moved to the next business day when they land on a weekend."""
+    """The four 1040-ES dates for tax year `year`, moved to the next business day when they land on a weekend,
+    a federal holiday, or DC Emancipation Day (a legal holiday in the District, so IRC 7503 moves the deadline)."""
     raw = [date(year, 4, 15), date(year, 6, 15), date(year, 9, 15), date(year + 1, 1, 15)]
-    return [next_business_day(d).isoformat() for d in raw]
+    return [next_business_day(d, dc=True).isoformat() for d in raw]
 
 
 def _state_code(raw) -> str:

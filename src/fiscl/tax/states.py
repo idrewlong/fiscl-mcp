@@ -344,23 +344,31 @@ def federal_holidays(year: int) -> set[date]:
     return days
 
 
-def next_business_day(day: date) -> date:
+def dc_emancipation_day(year: int) -> date:
+    """April 16, observed Friday when it falls on a Saturday and Monday when it falls on a Sunday."""
+    day = date(year, 4, 16)
+    return day - timedelta(days=1) if day.weekday() == 5 else day + timedelta(days=1) if day.weekday() == 6 else day
+
+
+def next_business_day(day: date, *, dc: bool = False) -> date:
     """`day`, or the next weekday that is not a US federal holiday.
 
-    State-only holidays (for example Patriot's Day in Massachusetts) are not known here.
+    `dc=True` also treats DC Emancipation Day as a holiday. IRC 7503 moves a deadline that falls on a legal holiday
+    in the District, so federal April dates (and DC's own dates) roll past it; other states' dates must not.
+    Other state-only holidays (for example Patriot's Day in Massachusetts) are not known here.
     """
-    while day.weekday() >= 5 or day in federal_holidays(day.year):
+    while day.weekday() >= 5 or day in federal_holidays(day.year) or (dc and day == dc_emancipation_day(day.year)):
         day += timedelta(days=1)
     return day
 
 
-def installment_date(token: str, year: int) -> date:
+def installment_date(token: str, year: int, *, dc: bool = False) -> date:
     """Turn a table date like "06-15" or "01-15+1" into a real, business-day-adjusted date for tax year `year`."""
     plus = token.endswith("+1")
     month, dom = (int(x) for x in token.removesuffix("+1").split("-"))
-    return next_business_day(date(year + plus, month, dom))
+    return next_business_day(date(year + plus, month, dom), dc=dc)
 
 
 def state_installments(code: str, year: int) -> list[tuple[date, str]]:
     """The state's (date, percent) installments for tax year `year`, rolled to business days."""
-    return [(installment_date(token, year), pct) for token, pct in STATES[code].installments]
+    return [(installment_date(token, year, dc=code == "DC"), pct) for token, pct in STATES[code].installments]
