@@ -148,11 +148,71 @@ MIGRATIONS: list[str] = [
         ('Business: Bank Fees', 'expense', '27b');
     UPDATE categories SET schedule_c_line = '1' WHERE name = 'Income: Freelance';
     """,
+    # 3 — v2 phase 1: tags, split transactions, manual assets, goals
+    """
+    CREATE TABLE tags (
+        transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        tag            TEXT NOT NULL,
+        PRIMARY KEY (transaction_id, tag)
+    );
+    CREATE INDEX ix_tags_tag ON tags(tag);
+
+    CREATE TABLE splits (
+        id             INTEGER PRIMARY KEY,
+        transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        amount         INTEGER NOT NULL,
+        category_id    INTEGER REFERENCES categories(id),
+        scope          TEXT CHECK (scope IN ('personal','business')),
+        note           TEXT
+    );
+    CREATE INDEX ix_splits_txn ON splits(transaction_id);
+
+    CREATE TABLE manual_assets (
+        id    INTEGER PRIMARY KEY,
+        name  TEXT NOT NULL UNIQUE,
+        kind  TEXT NOT NULL CHECK (kind IN
+                ('property','vehicle','equipment','investment','cash','liability','other')),
+        value INTEGER NOT NULL,
+        as_of TEXT NOT NULL,
+        note  TEXT
+    );
+
+    CREATE TABLE goals (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL UNIQUE,
+        target      INTEGER NOT NULL CHECK (target > 0),
+        target_date TEXT,
+        account_id  INTEGER REFERENCES accounts(id),
+        saved       INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        archived    INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- One row per money line: an unsplit transaction, or each child of a split one. A split parent is
+    -- replaced by its children (their amount, category and scope; the parent's date, account, merchant,
+    -- transfer group and pending flag). `id` is always the parent transaction id; `split_id` is set on children.
+    CREATE VIEW txn_lines AS
+    SELECT t.id AS id, NULL AS split_id, t.account_id, t.posted_date, t.amount, t.currency,
+           t.raw_description, t.merchant, t.memo, t.category_id, t.category_source, t.scope,
+           t.transfer_group, t.is_pending, t.note, t.import_id
+      FROM transactions t
+     WHERE NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)
+    UNION ALL
+    SELECT t.id, s.id, t.account_id, t.posted_date, s.amount, t.currency,
+           t.raw_description, t.merchant, t.memo, s.category_id, 'manual', COALESCE(s.scope, t.scope),
+           t.transfer_group, t.is_pending, COALESCE(s.note, t.note), t.import_id
+      FROM splits s JOIN transactions t ON t.id = s.transaction_id;
+    """,
 ]
 
-# The standard join for transaction queries. SCOPE_SQL, SPENDING_FILTER and INCOME_FILTER rely on these aliases.
-TXN_FROM = """transactions t JOIN accounts a ON a.id = t.account_id
+# The standard join for aggregate queries, over split-aware money lines (see the txn_lines view).
+# SCOPE_SQL, SPENDING_FILTER and INCOME_FILTER rely on the t/a/c aliases.
+TXN_FROM = """txn_lines t JOIN accounts a ON a.id = t.account_id
               LEFT JOIN categories c ON c.id = t.category_id"""
+
+# The same join over the raw transactions table: row listings and edits, where a split parent is one row.
+TXN_BASE_FROM = """transactions t JOIN accounts a ON a.id = t.account_id
+                   LEFT JOIN categories c ON c.id = t.category_id"""
 
 # Effective scope of a transaction: its own override, else its account's (mixed counts as personal
 # until a transaction is explicitly marked business).

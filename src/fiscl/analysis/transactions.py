@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..common import account_id, latest_balance, meta, money_arg, scope_sql
+from ..common import MAX_TAG_LEN, account_id, latest_balance, meta, money_arg, scope_sql
 from ..config import Config
-from ..db import TXN_FROM
+from ..db import TXN_BASE_FROM, TXN_FROM
 from ..guard import choice, clamp_limit, clean_text, date_range, like_escape
 from ..money import amount
 
@@ -32,8 +32,13 @@ def query_transactions(
     limit=None,
     sort="date_desc",
     scope="all",
+    tag=None,
     today=None,
 ) -> dict:
+    """Transaction rows (a split parent is one row with a `splits` array). Totals are over those parent rows.
+
+    The category and scope filters also match a parent when any of its split children match.
+    """
     start, end = date_range(from_, to, default_days=30, today=today)
     limit = clamp_limit(limit, cfg)
     sort_sql = _SORTS[choice(sort, tuple(_SORTS), "sort")]
@@ -44,10 +49,13 @@ def query_transactions(
         params.append(acct)
     if category:
         if category.lower() == "uncategorized":
-            where.append("t.category_id IS NULL")
+            where.append("t.category_id IS NULL AND NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)")
         else:
-            where.append("c.name = ? COLLATE NOCASE")
+            where.append(f"t.id IN (SELECT t.id FROM {TXN_FROM} WHERE c.name = ? COLLATE NOCASE)")
             params.append(category)
+    if tag:
+        where.append("t.id IN (SELECT transaction_id FROM tags WHERE tag = ?)")
+        params.append(clean_text(tag, MAX_TAG_LEN).lower())
     if merchant:
         where.append("t.merchant = ? COLLATE NOCASE")
         params.append(clean_text(merchant))
@@ -62,8 +70,10 @@ def query_transactions(
         where.append("(t.merchant LIKE ? ESCAPE '\\' OR t.raw_description LIKE ? ESCAPE '\\')")
         params += [needle, needle]
     s_sql, s_params = scope_sql(scope)
-    params += s_params
-    base = f"FROM {TXN_FROM} WHERE {' AND '.join(where)} {s_sql}"
+    if s_sql:  # evaluated per money line so a split parent matches when any child is in scope
+        where.append(f"t.id IN (SELECT t.id FROM {TXN_FROM} WHERE 1 = 1 {s_sql})")
+        params += s_params
+    base = f"FROM {TXN_BASE_FROM} WHERE {' AND '.join(where)}"
     totals = conn.execute(
         f"""SELECT COUNT(*) AS n, COALESCE(SUM(t.amount), 0) AS net,
                    COALESCE(SUM(CASE WHEN t.amount < 0 THEN t.amount END), 0) AS outflow,
@@ -76,6 +86,29 @@ def query_transactions(
             {base} ORDER BY {sort_sql} LIMIT ?""",
         [*params, limit],
     ).fetchall()
+    ids = [r["id"] for r in rows]
+    tags_by: dict[int, list[str]] = {}
+    splits_by: dict[int, list[dict]] = {}
+    if ids:
+        marks = ",".join("?" * len(ids))
+        for tr in conn.execute(
+            f"SELECT transaction_id, tag FROM tags WHERE transaction_id IN ({marks}) ORDER BY tag", ids
+        ):
+            tags_by.setdefault(tr["transaction_id"], []).append(tr["tag"])
+        for sr in conn.execute(
+            f"""SELECT s.transaction_id, s.id, s.amount, s.scope, s.note, c.name AS category
+                FROM splits s LEFT JOIN categories c ON c.id = s.category_id
+                WHERE s.transaction_id IN ({marks}) ORDER BY s.id""",
+            ids,
+        ):
+            part = {
+                "amount": amount(sr["amount"], cfg.currency),
+                "category": sr["category"] or "Uncategorized",
+                "scope": sr["scope"],
+            }
+            if sr["note"]:
+                part["note"] = sr["note"]
+            splits_by.setdefault(sr["transaction_id"], []).append(part)
     items = []
     for r in rows:
         item = {
@@ -94,6 +127,10 @@ def query_transactions(
                 item["memo"] = r["memo"]
         if r["note"]:
             item["note"] = r["note"]
+        if r["id"] in tags_by:
+            item["tags"] = tags_by[r["id"]]
+        if r["id"] in splits_by:
+            item["splits"] = splits_by[r["id"]]
         items.append(item)
     return {
         "transactions": items,
@@ -172,6 +209,7 @@ def list_uncategorized(conn, cfg: Config, from_=None, to=None, limit=None, today
                   MAX(t.posted_date) AS last, GROUP_CONCAT(DISTINCT a.name) AS accounts
            FROM transactions t JOIN accounts a ON a.id = t.account_id
            WHERE t.category_id IS NULL AND t.transfer_group IS NULL AND t.posted_date BETWEEN ? AND ?
+             AND NOT EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id)
            GROUP BY t.merchant ORDER BY ABS(SUM(t.amount)) DESC""",
         (start.isoformat(), end.isoformat()),
     ).fetchall()

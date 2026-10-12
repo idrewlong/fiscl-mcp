@@ -5,10 +5,10 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
-from ..common import meta
-from ..config import Config, load_budgets
+from ..common import check_items, meta, money_arg, plan_result
+from ..config import Budget, Config, load_budgets, write_budgets
 from ..db import SPENDING_FILTER, TXN_FROM
-from ..guard import GuardError, parse_month
+from ..guard import GuardError, clean_text, parse_month
 from ..money import amount, pct
 from ..recurring import add_months
 
@@ -129,3 +129,60 @@ def suggest_budgets(conn, cfg: Config, months=3, today=None) -> dict:
         "suggestions": suggestions,
         "meta": meta(conn, cfg, note="Suggestions only. Add the ones you want to budgets.toml."),
     }
+
+
+def _line(b: Budget, cfg: Config) -> dict:
+    return {"category": b.category, "monthly": amount(b.monthly, cfg.currency), "rollover": b.rollover}
+
+
+def set_budget(conn, cfg: Config, items: list[dict], dry_run=True) -> dict:
+    """Add, change, or remove monthly budgets in budgets.toml (monthly=null removes). Dry run by default."""
+    check_items(items)
+    current = {b.category.lower(): b for b in load_budgets(cfg)}
+    after = dict(current)
+    plan, seen = [], set()
+    for i, item in enumerate(items, start=1):
+        category = clean_text(str(item.get("category") or ""), 60)
+        if not category:
+            raise GuardError(f"item {i}: category is required")
+        key = category.lower()
+        if key in seen:
+            raise GuardError(f"item {i}: {category!r} appears twice")
+        seen.add(key)
+        if "monthly" not in item:
+            raise GuardError(f"item {i}: monthly is required (dollars, or null to remove the budget)")
+        old = current.get(key)
+        if item["monthly"] is None:
+            if old is None:
+                raise GuardError(f"item {i}: no budget exists for {category!r}")
+            del after[key]
+            plan.append({"category": old.category, "action": "remove", "before": _line(old, cfg), "after": None})
+            continue
+        monthly = money_arg(item["monthly"], cfg, f"item {i} monthly")
+        if monthly is None or monthly <= 0:
+            raise GuardError(f"item {i}: monthly must be a positive amount")
+        rollover = item.get("rollover", old.rollover if old else False)
+        if not isinstance(rollover, bool):
+            raise GuardError(f"item {i}: rollover must be true or false")
+        new = Budget(category=old.category if old else category, monthly=monthly, rollover=rollover)
+        after[key] = new
+        if old is None:
+            action = "add"
+        else:
+            action = "unchanged" if (old.monthly, old.rollover) == (monthly, rollover) else "update"
+        exists = conn.execute("SELECT 1 FROM categories WHERE name = ? COLLATE NOCASE", (new.category,)).fetchone()
+        plan.append(
+            {
+                "category": new.category,
+                "action": action,
+                "before": _line(old, cfg) if old else None,
+                "after": _line(new, cfg),
+                "category_exists": exists is not None,
+            }
+        )
+    if not dry_run:
+        write_budgets(cfg, list(after.values()))
+    result = plan_result(plan, 0, dry_run, "Call again with dry_run=false to write budgets.toml (a .bak is kept).")
+    result["budgets_after"] = [_line(b, cfg) for b in sorted(after.values(), key=lambda b: b.category.lower())]
+    result["meta"] = meta(conn, cfg)
+    return result

@@ -14,6 +14,8 @@ from .money import AmountError, to_minor
 
 MAX_BULK_ROWS = 500
 MAX_EDIT_ITEMS = 100
+MAX_TAG_LEN = 40
+MAX_TAGS_PER_ITEM = 20
 SCOPES = ("all", "personal", "business")
 
 
@@ -130,6 +132,18 @@ def resolve_target(conn, item: dict, i: int) -> tuple[str | None, list[int] | No
             f"{select} WHERE t.id IN ({','.join('?' * len(ids))}) AND t.transfer_group IS NULL", ids
         ).fetchall()
     return merchant, ids, rows
+
+
+def clean_tag(value, where: str) -> str:
+    """A tag as stored: untrusted text cleaned, lowercased, at most MAX_TAG_LEN characters."""
+    if not isinstance(value, str):
+        raise GuardError(f"{where}: tags must be strings")
+    tag = clean_text(value, 200).lower()
+    if not tag:
+        raise GuardError(f"{where}: empty tag")
+    if len(tag) > MAX_TAG_LEN:
+        raise GuardError(f"{where}: tag longer than {MAX_TAG_LEN} characters")
+    return tag
 
 
 def target_of(merchant: str | None, ids: list[int] | None) -> dict:

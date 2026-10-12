@@ -37,10 +37,19 @@ async def test_tools_listed_with_annotations(demo):
         "set_scope",
         "log_trip",
         "sync_accounts",
+        "add_note",
+        "tag_transactions",
+        "split_transaction",
+        "dismiss_recurring",
+        "set_budget",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
     assert tools["apply_categories"].annotations.read_only_hint is False
+    for name in ("add_note", "tag_transactions", "split_transaction", "dismiss_recurring", "set_budget"):
+        a = tools[name].annotations
+        assert a.read_only_hint is False and a.destructive_hint is False and a.open_world_hint is False, name
+        assert "dry_run" in tools[name].description, name
     assert tools["show_chart"].meta["ui"]["resourceUri"] == "ui://fiscl/chart.html"
 
 
@@ -74,6 +83,60 @@ async def test_write_tools_default_to_dry_run(demo, conn):
         assert r.structured_content["transactions_affected"] > 0
     after = conn.execute("SELECT COUNT(*) FROM transactions WHERE category_source = 'manual'").fetchone()[0]
     assert before == after
+
+
+async def test_new_write_tools_default_to_dry_run_and_change_nothing(demo, conn):
+    def snapshot():
+        return (
+            conn.execute("SELECT COUNT(note) FROM transactions").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM splits").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM recurring").fetchone()[0],
+            conn.execute("SELECT COUNT(*) FROM recurring_dismissed").fetchone()[0],
+            demo.budgets_file.read_text(),
+        )
+
+    parent = conn.execute(
+        "SELECT id, amount, merchant FROM transactions WHERE amount < -1000 AND transfer_group IS NULL LIMIT 1"
+    ).fetchone()
+    rec = conn.execute("SELECT merchant FROM recurring LIMIT 1").fetchone()[0]
+    half = parent["amount"] // 2
+    calls = {
+        "add_note": {"transaction_id": parent["id"], "note": "hello"},
+        "tag_transactions": {"items": [{"merchant": parent["merchant"], "add": ["x"]}]},
+        "split_transaction": {
+            "transaction_id": parent["id"],
+            "parts": [
+                {"amount": half / 100, "category": "Groceries"},
+                {"amount": (parent["amount"] - half) / 100, "category": "Dining"},
+            ],
+        },
+        "dismiss_recurring": {"merchant": rec},
+        "set_budget": {"items": [{"category": "Dining", "monthly": 123}]},
+    }
+    before = snapshot()
+    async with Client(build_server(demo)) as c:
+        for name, args in calls.items():
+            r = await c.call_tool(name, args)
+            assert not r.is_error, (name, r.content)
+            assert r.structured_content["dry_run"] is True, name
+            assert r.structured_content["changes"], name
+            assert "data_freshness" in r.structured_content["meta"], name
+        assert snapshot() == before
+        # Bad input is a tool error, not a crash.
+        bad = [
+            ("split_transaction", {"transaction_id": parent["id"], "parts": [{"amount": 1, "category": "A"}] * 2}),
+            ("tag_transactions", {"items": [{"merchant": parent["merchant"], "add": ["x" * 50]}]}),
+            ("set_budget", {"items": [{"category": "Dining", "monthly": -1}]}),
+            ("add_note", {"transaction_id": 10**9, "note": "x"}),
+        ]
+        for name, args in bad:
+            r = await c.call_tool(name, args)
+            assert r.is_error, name
+        # dry_run=false applies through the same path.
+        r = await c.call_tool("set_budget", {"items": [{"category": "Dining", "monthly": 123}], "dry_run": False})
+        assert r.structured_content["dry_run"] is False
+        assert "123.00" in demo.budgets_file.read_text()
 
 
 async def test_output_is_redacted_and_audit_log_has_no_merchants(cfg, conn, accounts):

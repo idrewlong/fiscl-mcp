@@ -133,7 +133,7 @@ def _daily_discretionary(conn, liquid_ids: list[int], today: date) -> int:
     recurring_merchants = {r[0] for r in conn.execute("SELECT merchant FROM recurring")}
     since = (today - timedelta(days=90)).isoformat()
     rows = conn.execute(
-        f"""SELECT t.merchant, -SUM(t.amount) AS s FROM transactions t
+        f"""SELECT t.merchant, -SUM(t.amount) AS s FROM txn_lines t
             LEFT JOIN categories c ON c.id = t.category_id
             WHERE t.posted_date > ? AND t.posted_date <= ? AND {SPENDING_FILTER}
               AND t.account_id IN ({_marks(liquid_ids)}) GROUP BY t.merchant""",

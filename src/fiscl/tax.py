@@ -358,7 +358,7 @@ def review_writeoffs(conn, cfg: Config, year=None, limit=25, today=None) -> dict
         ]
 
     mixed = conn.execute(
-        """SELECT a.name, COUNT(*) AS n FROM transactions t JOIN accounts a ON a.id = t.account_id
+        """SELECT a.name, COUNT(*) AS n FROM txn_lines t JOIN accounts a ON a.id = t.account_id
            WHERE a.scope = 'mixed' AND t.scope IS NULL AND t.transfer_group IS NULL
              AND t.posted_date BETWEEN ? AND ? GROUP BY a.id""",
         span,

@@ -26,6 +26,10 @@ def test_core_makes_no_network_calls(conn, cfg, monkeypatch):
     analysis.spending_summary(conn, cfg, today=TODAY)
     tax.schedule_c_draft(conn, cfg, year=2026, today=TODAY)
     tax.review_writeoffs(conn, cfg, year=2026, today=TODAY)
+    analysis.query_transactions(conn, cfg, tag="x", today=TODAY)
+    analysis.add_note(conn, cfg, transaction_id=1, note="n")
+    analysis.tag_transactions(conn, cfg, [{"transaction_ids": [1], "add": ["x"]}])
+    analysis.set_budget(conn, cfg, [{"category": "Dining", "monthly": 5}])
     for kind in ("spending_by_category", "spending_by_month", "cash_flow", "forecast", "budget"):
         build_chart(conn, cfg, kind=kind, today=TODAY)
 

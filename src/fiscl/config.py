@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tomllib
@@ -295,3 +296,50 @@ def append_toml_block(path: Path, block: str, tool: str) -> None:
     sep = "" if existing.endswith("\n") or not existing else "\n"
     _write_private(path, f"{existing}{sep}\n# added by {tool} at {stamp}\n{block.rstrip()}\n")
     tomllib.loads(path.read_text(encoding="utf-8"))  # fail loudly if we produced invalid TOML
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)  # JSON strings with \uXXXX escapes are valid TOML basic strings
+
+
+def write_budgets(cfg: Config, budgets: list[Budget], tool: str = "set_budget") -> None:
+    """Rewrite only the [[budget]] blocks of budgets.toml.
+
+    Everything outside those blocks (header comments, other tables) is kept. A .bak is written first, a
+    provenance comment is added, and the result is re-validated with load_budgets; on failure the original
+    file is restored.
+    """
+    path = cfg.budgets_file
+    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    kept: list[str] = []
+    in_budget = False
+    for line in original.splitlines():
+        stripped = line.strip()
+        if stripped == "[[budget]]":
+            in_budget = True
+        elif stripped.startswith("["):
+            in_budget = False
+        if not in_budget and not stripped.startswith("# updated by "):
+            kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    scale = 1 if cfg.currency in ("JPY", "KRW") else 100
+    out = "\n".join(kept)
+    out += "\n\n" if out else ""
+    out += f"# updated by {tool} at {datetime.now().isoformat(timespec='seconds')}\n"
+    for b in sorted(budgets, key=lambda b: b.category.lower()):
+        monthly = str(b.monthly) if scale == 1 else f"{Decimal(b.monthly) / scale:.2f}"
+        out += f"\n[[budget]]\ncategory = {_toml_string(b.category)}\nmonthly = {monthly}\n"
+        if b.rollover:
+            out += "rollover = true\n"
+    backup_file(path)
+    _write_private(path, out)
+    try:
+        written = load_budgets(cfg)
+        if [(b.category, b.monthly, b.rollover) for b in written] != [
+            (b.category, b.monthly, b.rollover) for b in sorted(budgets, key=lambda b: b.category.lower())
+        ]:
+            raise ConfigError("budgets.toml did not round-trip")
+    except ConfigError:
+        _write_private(path, original)
+        raise
