@@ -552,6 +552,8 @@ FORBIDDEN_ANYIO_CALLS = {
     "create_udp_socket",
     "create_connected_udp_socket",
 }
+# `from anyio import connect_tcp` then a bare `connect_tcp(...)` is not an attribute call; catch it as an import.
+NETWORK_MODULES |= {f"anyio.{name}" for name in FORBIDDEN_ANYIO_CALLS}
 # connect.py's loopback-only one-shot server (127.0.0.1, random port, token URL) is the single allowed exception.
 # http_transport.py (Phase 5) is the second named loopback exception and the only module that opens a *listening*
 # socket for the MCP server: it binds the literal 127.0.0.1 / ::1 itself (`socket`) and serves through `uvicorn`,
