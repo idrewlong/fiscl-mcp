@@ -470,7 +470,7 @@ Each one has a test (see `tests/test_guardrails.py`, `test_mcp.py`, `test_simple
 - [x] Dismiss recurring
 
 **MCP**
-- [ ] Streamable HTTP on localhost with a keychain bearer token
+- [x] Streamable HTTP on localhost with a keychain bearer token (read-only tools by default)
 - [ ] Resource change notifications after imports
 
 ### Later / maybe

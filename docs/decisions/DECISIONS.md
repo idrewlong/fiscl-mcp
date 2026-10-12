@@ -88,3 +88,9 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - QIF apostrophe years (`'YY`) are always 20YY; the pivot applies only to slash/dotted two-digit years.
 - `connect forget qbo` revokes at Intuit only when the app keys are stored; it always deletes the refresh token, realm and connection rows and reports the skipped revoke on stderr.
 - The QBO callback binds `[::1]:<redirect_port>` without listening (no reuse options) so `localhost` can't be squatted on IPv6; busy means stop, no IPv6 loopback means skip. Only a request with the right `state` consumes the one-shot. `receivables` withholds customer names, document numbers and the customer filter under `redact_descriptions`.
+
+## 2026-10-12 — HTTP transport design (Phase 5)
+- fiscl uses its own ASGI gate in front of the SDK's streamable-HTTP app, not the SDK's OAuth `AuthSettings`. Order: loopback peer → exact Host (with port) → any Origin rejected → path/method → rate limit (20 failures/60 s → 60 s lock) → bearer digest compare → JSON content type. No CORS headers ever.
+- The token lives only in the OS keychain (`fiscl:http:token`) and is read per request, so rotation is immediate. A keychain failure fails closed with 503. It is never accepted from a query string or cookie.
+- Read-only by default: every tool not annotated `readOnlyHint=true` (including `sync_accounts`) is removed from the HTTP server unless `[http] allow_writes = true`. New tools must opt in as read-only.
+- `http_transport.py` is the second named exception (with `sync/connect.py`) in the AST network-import guard.

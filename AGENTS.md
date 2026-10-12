@@ -16,12 +16,14 @@ Local-first personal + business finance MCP server. It imports bank exports (CSV
 | Lint + format check | `uv run ruff check . && uv run ruff format --check .` |
 | Format | `uv run ruff format .` |
 | Unit tests | `uv run pytest -q` (~6s; `-m 'not smoke'` skips the stdio smoke test) |
+| HTTP server (loopback, bearer token, read-only by default) | `uv run fiscl serve --http` · token: `uv run fiscl http token show|rotate|forget` |
 | Smoke (every tool over stdio) | `uv run python scripts/smoke.py` |
 | Build | `uv build` |
 
 ## Layout
 ```
 src/fiscl/
+  http_transport.py  optional loopback HTTP transport: ASGI gate (bearer token, Origin/Host/method checks, rate limit) in front of the SDK app
   server.py        MCP wiring: one thin wrapper per tool → run() guard (open DB, call service, redact, audit)
   analysis/        read services + categorization edits, one module per area:
     transactions.py  query_transactions, list_accounts, import_status, list_uncategorized

@@ -91,6 +91,8 @@ class Config:
     qbo_accounting_method: str = "cash"  # [connectors.qbo] accounting_method: P&L basis, cash | accrual
     qif_date_order: str = "mdy"  # [import] qif_date_order: how to read ambiguous QIF dates (mdy | dmy)
     fx_max_rate_age_days: int = 7  # [fx] max_rate_age_days: how stale a rate may be for a transaction's date (1-31)
+    http_port: int = 8787  # [http] port: `fiscl serve --http` listens here on loopback only (1024-65535)
+    http_allow_writes: bool = False  # [http] allow_writes: expose write tools over HTTP (read-only tools by default)
 
     @property
     def db_path(self) -> Path:
@@ -163,6 +165,11 @@ qif_date_order = "mdy"
 # Exchange rates come only from you (`set_fx_rate`, `fiscl fx import`); fiscl never looks them up. A transaction in
 # another currency uses the latest rate dated on or before it, if that rate is at most this many days older.
 max_rate_age_days = 7
+
+# `fiscl serve --http`: loopback-only HTTP with a keychain bearer token. Read-only tools only, unless you opt in.
+# [http]
+# port = 8787
+# allow_writes = false   # true also exposes the tools that change your data (and sync_accounts) over HTTP
 
 # QuickBooks Online (read-only; `fiscl connect qbo`). Sandbox only for now: "production" is refused until a human has
 # verified Intuit's production requirements. redirect_port must match the redirect URI registered in your Intuit app:
@@ -429,8 +436,16 @@ def load_config(home: Path | None = None) -> Config:
     qif_date_order = (raw.get("import", {}) or {}).get("qif_date_order", "mdy")
     if qif_date_order not in ("mdy", "dmy"):
         raise ConfigError("import.qif_date_order must be mdy or dmy")
+    http_raw = raw.get("http", {}) or {}
+    if not isinstance(http_raw, dict):
+        raise ConfigError("[http] must be a table")
+    allow_writes = http_raw.get("allow_writes", False)
+    if not isinstance(allow_writes, bool):
+        raise ConfigError("http.allow_writes must be true or false")
     return Config(
         home=home,
+        http_port=_int(http_raw, "port", 8787, 1024, 65535, "http"),
+        http_allow_writes=allow_writes,
         qif_date_order=qif_date_order,
         fx_max_rate_age_days=_int(raw.get("fx", {}) or {}, "max_rate_age_days", 7, 1, 31, "fx"),
         tax=tax,

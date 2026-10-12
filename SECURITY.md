@@ -35,6 +35,12 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 - **Keychain scope.** On macOS the keychain items are readable by code running as you with the same interpreter, so this protects against other users and a stolen disk, not malware already running as you.
 - **Audit trail.** `fiscl audit` shows every tool call with sanitized arguments; merchant names, descriptions, and amounts are never logged, and failed calls log only a stable error code (such as `not_found`), never the error text.
 
+## HTTP transport (optional)
+
+`fiscl serve --http` listens only on the literal loopback address `127.0.0.1` or `::1`; anything else is refused before a socket opens. Every request needs a bearer token kept in the OS keychain and read on each request, so `fiscl http token rotate` takes effect immediately. If the keychain can't be read, requests fail closed with 503. Requests with any `Origin` header are rejected (browser pages can't reach it), `Host` must match exactly including the port, and no CORS headers are ever sent. Twenty failed attempts in 60 seconds lock the server for 60 seconds. Access logs and the server header are off.
+
+Over HTTP, only read-only tools are available unless you set `[http] allow_writes = true`; if you do, keep per-call approval on in your client. Residual risk: a process running as your user that binds the port first could collect the token from a client that connects to it. fiscl never picks a port for you, and you can rotate the token. Plain HTTP on loopback is by design; malware running as your user is out of scope.
+
 ## Exports
 
 `export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions. Exports are scrubbed like tool responses: card numbers (Luhn-checked), SSNs, and long account-like numbers in text cells are masked in CSV and Markdown (so 9+ digit invoice numbers in notes are masked too); amounts are untouched. Files are published with a hard link so a name that appears at the last moment is never overwritten.

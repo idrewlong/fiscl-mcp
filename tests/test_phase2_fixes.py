@@ -538,13 +538,18 @@ NETWORK_MODULES = {
     "httpx",
     "aiohttp",
     "websockets",
+    "uvicorn",
 }
 # connect.py's loopback-only one-shot server (127.0.0.1, random port, token URL) is the single allowed exception.
 # It imports `socket` only to reserve [::1] on the QuickBooks redirect port (bind without listen), so a local program
 # can't squat the address `localhost` may resolve to; it never connects anywhere.
+# http_transport.py (Phase 5) is the second named loopback exception and the only module that opens a *listening*
+# socket for the MCP server: it binds the literal 127.0.0.1 / ::1 itself (`socket`) and serves through `uvicorn`,
+# behind a bearer-token/Host/Origin gate (tests/test_http_transport.py). Any other new network import still fails here.
 ALLOWED_NETWORK_IMPORTS = {
     "sync/base.py": {"urllib.request", "ssl"},
     "sync/connect.py": {"http.server", "socket"},
+    "http_transport.py": {"socket", "uvicorn"},
 }
 
 

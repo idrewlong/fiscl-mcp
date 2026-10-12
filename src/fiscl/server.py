@@ -41,6 +41,11 @@ fiscl answers questions about the user's own finances from bank exports stored o
 - Amount arguments are in normal units (dollars), negative for money out.
 """
 
+READ_ONLY_NOTE = """\
+- This connection is read-only: tools that change data (and sync_accounts) are not available here. If the user
+  wants an edit, tell them to make it from a stdio session or to set `[http] allow_writes = true`.
+"""
+
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 # LOCAL_WRITE is for purely additive writes. Anything that can remove or overwrite user data is LOCAL_DESTRUCTIVE,
 # so MCP clients can show the stricter approval prompt. The client's tool approval is the human gate; dry_run is only
@@ -68,7 +73,8 @@ def _count_rows(result: dict) -> int | None:
     return m.get("row_count") if isinstance(m, dict) else None
 
 
-def build_server(cfg: Config) -> MCPServer:
+def build_server(cfg: Config, *, read_only: bool = False) -> MCPServer:
+    """`read_only=True` (the HTTP default) registers only tools annotated readOnlyHint=true."""
     apps = Apps()
 
     def run(name: str, service, /, **kwargs) -> dict[str, Any]:
@@ -136,7 +142,7 @@ def build_server(cfg: Config) -> MCPServer:
     mcp = MCPServer(
         "fiscl",
         title="fiscl personal finance",
-        instructions=INSTRUCTIONS,
+        instructions=INSTRUCTIONS + (READ_ONLY_NOTE if read_only else ""),
         version=__version__,
         extensions=[apps],
     )
@@ -1163,4 +1169,14 @@ def build_server(cfg: Config) -> MCPServer:
             backup_if_stale(conn, cfg)
     except Exception:  # never block startup on a backup
         log.exception("startup backup failed")
+    if read_only:
+        _drop_write_tools(mcp)
     return mcp
+
+
+def _drop_write_tools(mcp: MCPServer) -> None:
+    """Remove every tool that isn't annotated readOnlyHint=true. Absent tools are neither listed nor callable, and
+    anything new is excluded unless it opts in as read-only (fail closed). sync_accounts counts as a write."""
+    for tool in list(mcp._tool_manager.list_tools()):
+        if not (tool.annotations is not None and tool.annotations.read_only_hint is True):
+            mcp.remove_tool(tool.name)

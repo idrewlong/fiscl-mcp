@@ -95,7 +95,80 @@ def _print(obj) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _serve_http(cfg, args) -> int:
+    from . import http_transport as ht
+    from .server import build_server
+
+    host = args.host
+    port = args.port if args.port is not None else cfg.http_port
+    tokens = ht.TokenStore()
+    try:
+        # Every refusal happens before a socket exists: bad host/port, then no OS keychain, then the bind itself.
+        ht.validate_bind(host, port)
+        tokens.ensure()
+        sock = ht.bind_loopback(host, port)
+    except ht.HttpConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    mcp = build_server(cfg, read_only=not cfg.http_allow_writes)
+    observer = None
+    if not args.no_watch:
+        from .watch import start_watcher
+
+        observer = start_watcher(cfg)
+    shown = f"[{host}]" if ":" in host else host
+    print(f"fiscl listening on http://{shown}:{port}{ht.MCP_PATH}", file=sys.stderr)
+    print("auth: Authorization: Bearer <token>; print it with `fiscl http token show`", file=sys.stderr)
+    if not cfg.http_allow_writes:
+        print("tools: read-only (set [http] allow_writes = true to expose write tools)", file=sys.stderr)
+    else:
+        print("tools: READ AND WRITE ([http] allow_writes = true); keep per-call approval on", file=sys.stderr)
+    try:
+        ht.serve(mcp, sock, tokens.get)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if observer is not None:
+            observer.stop()
+    return 0
+
+
+def cmd_http_token(cfg, args) -> int:
+    from . import http_transport as ht
+    from .sync.base import SyncError
+
+    tokens = ht.TokenStore()
+    try:
+        if args.action == "show":
+            token = tokens.get()
+            if token is None:
+                print("error: no HTTP token yet; run `fiscl http token`", file=sys.stderr)
+                return 1
+            if not sys.stderr.isatty():
+                print("error: refusing to print the token when stderr is not a terminal", file=sys.stderr)
+                return 1
+            print(token, file=sys.stderr)
+        elif args.action == "rotate":
+            tokens.rotate()
+            print(
+                "token rotated; the old one stops working at once. `fiscl http token show` prints it.", file=sys.stderr
+            )
+        elif args.action == "forget":
+            tokens.forget()
+            print("token deleted from the OS keychain", file=sys.stderr)
+        else:
+            _, created = tokens.ensure()
+            msg = "token created and stored" if created else "token stored"
+            print(f"{msg} in the OS keychain", file=sys.stderr)
+    except (ht.HttpConfigError, SyncError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_serve(cfg, args) -> int:
+    if args.http:
+        return _serve_http(cfg, args)
     from .server import build_server
 
     observer = None
@@ -564,9 +637,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("serve", help="run the MCP server over stdio")
+    s = sub.add_parser("serve", help="run the MCP server over stdio (or loopback HTTP with --http)")
     s.add_argument("--no-watch", action="store_true", help="don't watch the inbox folder")
+    s.add_argument("--http", action="store_true", help="serve streamable HTTP on loopback with a bearer token")
+    s.add_argument(
+        "--host", default="127.0.0.1", help="with --http: exactly 127.0.0.1 or ::1 (nothing else is allowed)"
+    )
+    s.add_argument("--port", type=int, default=None, help="with --http: port (default [http] port, 8787)")
     s.set_defaults(fn=cmd_serve)
+
+    s = sub.add_parser("http", help="HTTP transport helpers")
+    a = s.add_subparsers(dest="http_cmd", required=True)
+    x = a.add_parser("token", help="create the HTTP bearer token (OS keychain), or show/rotate/forget it")
+    x.add_argument("action", nargs="?", choices=["show", "rotate", "forget"], help="omit to create if missing")
+    x.set_defaults(fn=cmd_http_token)
 
     s = sub.add_parser("import", help="import CSV/OFX/QFX/QIF files and holdings snapshots")
     s.add_argument("files", nargs="+")
