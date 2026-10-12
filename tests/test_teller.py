@@ -270,7 +270,9 @@ def test_explicit_provider_not_connected_is_a_guard_error(cfg, conn, keychain):
     with pytest.raises(GuardError):
         registry.sync_accounts(conn, cfg, provider="bogus")
     empty = registry.sync_accounts(conn, cfg, today=TODAY)
-    assert empty["results"] == {} and "No bank is connected" in empty["meta"]["note"]
+    note = empty["meta"]["note"]
+    assert empty["results"] == {} and "No bank is connected" in note
+    assert "fiscl sync setup" in note and "fiscl connect teller" not in note  # file import / SimpleFIN first
 
 
 def test_list_connections_has_no_tokens(cfg, conn, connected):

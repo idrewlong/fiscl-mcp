@@ -143,7 +143,10 @@ def sync_accounts(
     skipped = [{"provider": p, "reason": "not connected"} for p in PROVIDERS if p not in targets and provider == "all"]
     note = None
     if not targets:
-        note = "No bank is connected yet. The user can connect one with `fiscl connect teller`."
+        note = (
+            "No bank is connected yet. Free option: import CSV/OFX/QFX files (`fiscl import`, or the inbox folder). "
+            "For cheap automatic sync the user can run `fiscl sync setup` (SimpleFIN Bridge, $1.50/month or $15/year)."
+        )
     elif errors:
         note = "Some providers failed; see errors. Data from the others was imported."
     return {
@@ -180,7 +183,10 @@ def list_connections(conn: sqlite3.Connection, cfg: Config, today: date | None =
             }
         )
     present = {r["provider"] for r in rows}
-    note = "Connections are made by the user in a terminal: `fiscl connect teller|plaid|simplefin`."
+    note = (
+        "Connections are made by the user in a terminal: `fiscl connect simplefin|plaid|teller` "
+        "(Teller only for users who already have access). File import needs no connection."
+    )
     return {
         "connections": out,
         "not_connected": [p for p in PROVIDERS if p not in present],

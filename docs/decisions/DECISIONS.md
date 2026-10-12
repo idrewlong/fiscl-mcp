@@ -36,3 +36,9 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - **Rejected:** a separate sync-state table (one cursor per connection fits the existing row); deleting removed rows inside `fetch` (would lose data if the import then failed).
 - **Open, needs the human:** run the live sandbox test (`FISCL_PLAID_CLIENT_ID`/`FISCL_PLAID_SECRET`) and a sandbox `fiscl connect plaid` in a browser to confirm Link loads under the CSP on `http://127.0.0.1`; production Link from plain-http localhost is unverified; `ins_109508` and the first-pull lag behavior come from docs/research, not from a recorded run.
 - **Where:** `src/fiscl/sync/plaid.py`, `connect.py`, `registry.py`, `importers/core.py`, `tests/test_plaid.py`.
+
+## 2026-10-11 — Default bank connection: free file import, then SimpleFIN; Teller demoted
+- **Decision:** Recommended order is (1) free file imports (CSV/OFX/QFX + inbox watcher, no third party), (2) SimpleFIN Bridge for cheap automatic sync ($1.50/month or $15/year), (3) Plaid Trial (free, 10 connections, needs the user's own Plaid developer account), (4) Teller, supported for users who already have Teller access. Supersedes "Teller first" from earlier today. No connector code is removed.
+- **Why:** Teller has no public signup (only a sign-in page; `/signup` returns 404, checked 2026-10-11), so most users couldn't follow a Teller-first setup. The user's requirement: "it needs to be a free or cheap option".
+- **Rejected:** Plaid as the default (free, but a developer account per user is too much friction for non-technical users); Teller as the default (not obtainable).
+- **Release gates:** live Teller and Plaid checks are deferred by the user's choice; connectors remain release-gated until verified.

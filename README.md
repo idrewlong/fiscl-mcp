@@ -1,6 +1,6 @@
 # fiscl
 
-A local-first personal **and** business finance server for the Model Context Protocol. Import your bank exports (or sync read-only through SimpleFIN), then ask Claude or any MCP client questions like these:
+A local-first personal **and** business finance server for the Model Context Protocol. Import your bank exports for free (or sync read-only through SimpleFIN for a few dollars a year), then ask Claude or any MCP client questions like these:
 
 - "Where did my money go last month compared to September?"
 - "What's safe to spend before payday?"
@@ -45,7 +45,18 @@ fiscl import ~/Downloads/statement.qfx          # OFX/QFX create the account aut
 
 If a CSV layout isn't recognized, run `fiscl profile init file.csv`, review the generated profile in `~/fiscl/profiles/`, then import again. Set `account = "…"` in a profile and you can just drop files into `~/fiscl/inbox/`; the server picks them up.
 
-### Read-only bank sync (optional)
+### Getting your bank data in
+
+Options, in the order we recommend them:
+
+1. **Free file import (no third party).** Export CSV/OFX/QFX from your bank and run `fiscl import` (see above), or drop files into `~/fiscl/inbox/` and the server's watcher picks them up. Nothing leaves your machine.
+2. **SimpleFIN Bridge (cheap automatic sync).** $1.50/month or $15/year, self-serve signup at bridge.simplefin.org.
+3. **Plaid Trial (free, 10 connections).** Needs your own Plaid developer account at dashboard.plaid.com.
+4. **Teller (only if you already have Teller access).** Teller has no public signup.
+
+The Teller and Plaid connectors are beta: live verification against the real services is still pending (a release gate), so expect rough edges. SimpleFIN and file import are the well-trodden paths.
+
+#### SimpleFIN Bridge
 
 ```bash
 uv sync --extra sync
@@ -53,28 +64,34 @@ fiscl sync setup   # paste a SimpleFIN Bridge setup token; it's stored in your O
 fiscl sync run
 ```
 
-Teller (recommended): create a free developer account at teller.io, then connect in your terminal. The data flows bank -> Teller -> your machine; Teller holds the bank connection and sees the data in transit.
+(`fiscl connect simplefin` does the same thing.)
 
-```bash
-uv sync --extra sync
-# optional, in ~/fiscl/config.toml:  [connectors.teller]  environment = "development"   # or "sandbox"
-fiscl connect teller        # asks for your application id (hidden) and your Teller certificate/key files once
-fiscl connect list
-fiscl connect forget teller # revokes access at Teller and deletes the stored credentials
-```
+#### Plaid Trial (beta)
 
-Plaid (alternative): create your own developer account at plaid.com. Sandbox works immediately with test banks; real banks need an approved production app (the Trial plan covers 10 Items, and removing an Item does not free its slot). The data flows bank -> Plaid -> your machine; Plaid holds the bank connection and sees the data in transit. fiscl only ever asks Plaid for the `transactions` product (balances and transactions), never account numbers, identity, or transfers.
+Create your own developer account at dashboard.plaid.com. Sandbox works immediately with test banks; real banks need an approved production app (the free Trial plan covers 10 Items, and removing an Item does not free its slot). The data flows bank -> Plaid -> your machine; Plaid holds the bank connection and sees the data in transit. fiscl only ever asks Plaid for the `transactions` product (balances and transactions), never account numbers, identity, or transfers.
 
 ```bash
 uv sync --extra sync
 # optional, in ~/fiscl/config.toml:  [connectors.plaid]  environment = "sandbox"   # default; or "production"
 fiscl connect plaid         # asks for your client_id and secret (hidden) once, then opens Plaid Link in your browser
+fiscl connect list
 fiscl connect forget plaid  # calls /item/remove at Plaid and deletes the stored credentials
 ```
 
 Sync is incremental (Plaid's cursor): the first pull imports what Plaid has, later pulls add new, changed, and removed transactions, and pending charges are replaced by their posted versions without losing your notes, tags, or categories.
 
-Then ask your assistant to run `sync_accounts` (all connected providers, or `provider: teller | plaid | simplefin`) and `list_connections`.
+#### Teller (beta; if you already have Teller access)
+
+Teller has no public signup, so this is for people who already hold a Teller developer account. The data flows bank -> Teller -> your machine; Teller holds the bank connection and sees the data in transit.
+
+```bash
+uv sync --extra sync
+# optional, in ~/fiscl/config.toml:  [connectors.teller]  environment = "development"   # or "sandbox"
+fiscl connect teller        # asks for your application id (hidden) and your Teller certificate/key files once
+fiscl connect forget teller # revokes access at Teller and deletes the stored credentials
+```
+
+Then ask your assistant to run `sync_accounts` (all connected providers, or `provider: simplefin | plaid | teller`) and `list_connections`.
 
 ## What it can do
 
@@ -108,7 +125,7 @@ fiscl key import ~/Desktop/fiscl-key.txt   # on the new machine, before importin
 
 Without the original key, re-importing the same bank files creates duplicate accounts. `fiscl doctor` warns when the key on this machine doesn't match the database. Delete the exported file once it is stored safely.
 
-Disconnecting a bank (`fiscl connect forget`, `fiscl sync forget`) removes stored credentials and revokes access at Teller and Plaid, but it does not delete the transactions already synced into your database or any backups. SimpleFIN forget is local only: also revoke the access at the SimpleFIN Bridge. If you downloaded Teller certificate/key files, delete them after fiscl copies them into the keychain.
+Disconnecting a bank (`fiscl connect forget`, `fiscl sync forget`) removes stored credentials and revokes access at Plaid and Teller, but it does not delete the transactions already synced into your database or any backups. SimpleFIN forget is local only: also revoke the access at the SimpleFIN Bridge. If you downloaded Teller certificate/key files, delete them after fiscl copies them into the keychain.
 
 ## Development
 

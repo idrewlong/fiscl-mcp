@@ -1,6 +1,6 @@
 # fiscl
 
-Local-first personal + business finance MCP server. It imports bank exports (CSV/OFX/QFX) or syncs read-only through SimpleFIN into a local SQLite DB, and exposes MCP tools for spending, cash flow, budgets, recurring charges, a cash forecast with safe-to-spend, in-chat charts, and sole-proprietor tax prep (Schedule C draft, write-off review, mileage, estimated tax). What matters most: **data stays local, numbers are deterministic, and nothing can move money.** The full product spec and roadmap are in `docs/PROJECT.md`.
+Local-first personal + business finance MCP server. It imports bank exports (CSV/OFX/QFX) or imports bank exports (free), or syncs read-only through SimpleFIN ($1.50/month or $15/year), Plaid Trial, or Teller into a local SQLite DB, and exposes MCP tools for spending, cash flow, budgets, recurring charges, a cash forecast with safe-to-spend, in-chat charts, and sole-proprietor tax prep (Schedule C draft, write-off review, mileage, estimated tax). What matters most: **data stays local, numbers are deterministic, and nothing can move money.** The full product spec and roadmap are in `docs/PROJECT.md`.
 
 ## Stack
 - Python 3.12+ · official MCP Python SDK `mcp>=2.3,<3` (`MCPServer`, `mcp.server.apps` for MCP Apps) · stdlib `sqlite3`, `tomllib`, `argparse`, `urllib` · `watchdog` · optional `keyring` (`fiscl[sync]`)
@@ -42,8 +42,8 @@ src/fiscl/
   importers/       core pipeline, csv_import (profiles), ofx, types
   sync/            read-only bank connectors (only package that may use the network):
     base.py          allowlisted no-redirect request helper, keychain helpers, mTLS, Connector protocol
-    teller.py · plaid.py · simplefin.py   one connector per provider (fixed route allowlists)
-    connect.py       human-only localhost connect flow (`fiscl connect teller|plaid [--reconnect]`)
+    simplefin.py · plaid.py · teller.py   one connector per provider (fixed route allowlists)
+    connect.py       human-only localhost connect flow (`fiscl connect plaid|teller [--reconnect]`)
     connections.py   the `connections` table (provider, institution, hashed ref, status, Plaid cursor; never a token)
     registry.py      build connectors, sync_accounts, list_connections, forget
   installkey.py    per-install random key for the keyed account hash (OS keychain, else 0600 `.install_key`)
@@ -79,6 +79,7 @@ docs/PROJECT.md    product spec + roadmap (v1 done, v2 planned)
 ## Never
 - Add any code path that moves money, pays, transfers, or writes to a financial institution.
 - Make network calls from the core (only `sync/` may, https + allowlisted hosts, through the no-redirect `open_url` with credentials in unredirected headers). `tests/test_guardrails.py` blocks sockets.
+- Recommend providers out of order: file import (free) → SimpleFIN → Plaid Trial → Teller (existing Teller access only; no public signup). Plaid and Teller stay marked beta until live verification passes (DECISIONS 2026-10-11).
 - Request or call any bank/aggregator product or endpoint that can move money or reveal full account numbers (Plaid `auth`/`transfer`/`payment_initiation`, Teller `payments`). Bank connections are set up by the human through the CLI, never through an MCP tool.
 - Render bank-derived text as HTML in the chart view (`innerHTML`); use `textContent`. Keep its CSP strict.
 - Create files without private permissions, or use `$HOME` itself as the data dir.

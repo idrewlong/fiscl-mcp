@@ -34,6 +34,8 @@ asyncio_mode = "auto"
 markers = ["smoke: runs scripts/smoke.py against demo data over stdio (a few seconds); deselect with -m 'not smoke'"]
 
 [tool.ruff]
+# Markdown under docs/ and specs/ contains illustrative snippets, not project code.
+extend-exclude = ["docs", "specs"]
 line-length = 120
 target-version = "py312"
 

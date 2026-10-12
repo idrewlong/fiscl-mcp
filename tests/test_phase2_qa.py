@@ -390,7 +390,7 @@ def test_sync_all_one_provider_fails_other_succeeds_and_db_is_consistent(cfg, co
 
 def test_sync_all_with_nothing_connected_is_a_note_not_an_error(cfg, conn, keychain):
     out = registry.sync_accounts(conn, cfg, provider="all", today=TODAY)
-    assert out["results"] == {} and out["errors"] == [] and "fiscl connect" in out["meta"]["note"]
+    assert out["results"] == {} and out["errors"] == [] and "fiscl sync setup" in out["meta"]["note"]
 
 
 def test_forget_then_sync_plaid_is_a_clean_not_connected_error_and_data_survives(cfg, conn, pconn, keychain):

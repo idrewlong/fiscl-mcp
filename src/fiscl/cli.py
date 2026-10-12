@@ -555,11 +555,21 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_parser("forget", help="remove the stored credential")
     s.set_defaults(fn=cmd_sync)
 
-    s = sub.add_parser("connect", help="connect a bank for read-only sync (human-only; never an MCP tool)")
+    s = sub.add_parser(
+        "connect",
+        help="connect a bank for read-only sync (human-only; never an MCP tool)",
+        description=(
+            "Free file import (`fiscl import`, or drop CSV/OFX/QFX files in the inbox) needs no connection at all. "
+            "For automatic sync, SimpleFIN Bridge is the cheap default ($1.50/month or $15/year). Plaid Trial is free "
+            "(10 connections) but needs your own Plaid developer account. Teller is supported only if you already "
+            "have Teller access (it has no public signup)."
+        ),
+    )
     a = s.add_subparsers(dest="target", required=True)
+    a.add_parser("simplefin", help="cheap automatic sync with a SimpleFIN setup token ($1.50/month or $15/year)")
     for name, text in (
-        ("teller", "connect through Teller (recommended; needs your own Teller developer account)"),
-        ("plaid", "connect through Plaid (needs your own Plaid developer account)"),
+        ("plaid", "connect through Plaid Trial (free, 10 connections; needs your own Plaid developer account; beta)"),
+        ("teller", "connect through Teller (only if you already have Teller access; no public signup; beta)"),
     ):
         x = a.add_parser(name, help=text)
         x.add_argument(
@@ -568,7 +578,6 @@ def build_parser() -> argparse.ArgumentParser:
             help="re-authorize a connection that needs it, keeping the same account (no duplicates)",
         )
         x.add_argument("--institution", help="with --reconnect: which connection, if several need it")
-    a.add_parser("simplefin", help="connect with a SimpleFIN setup token")
     a.add_parser("list", help="show connected banks (no secrets)")
     x = a.add_parser("forget", help="revoke access and delete the stored credentials")
     x.add_argument("provider", choices=("simplefin", "teller", "plaid"))

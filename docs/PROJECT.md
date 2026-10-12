@@ -194,7 +194,7 @@ Planned (v2): `holdings`, `goals`, `tags`, `splits`, `receipts`.
 | CSV with mapping profiles | v1 ✅ | Built-in: chase-checking, chase-credit, generic, generic-debit-credit. User profiles in `~/fiscl/profiles/`; `fiscl profile init <csv>` writes a starter profile |
 | OFX 1.x (SGML), 2.x (XML), QFX | v1 ✅ | Tolerant tag parser; balances from LEDGERBAL; multiple statements per file |
 | **SimpleFIN Bridge (read-only bank sync)** | v1 ✅ | About $15/year per user, no developer approval. Setup token → access URL stored in the OS keychain; https + host allowlist; 90-day windows |
-| Teller / Plaid (bring your own keys) | v2 | Read-only scopes only. Plaid's free trial covers 10 live connections; Teller's free tier covers 100 |
+| Plaid / Teller (bring your own keys, beta) | v2 | Read-only. Plaid's free Trial covers 10 live connections. Teller has no public signup (existing customers only). Recommended order: file import (free) → SimpleFIN ($1.50/mo) → Plaid Trial → Teller |
 | QuickBooks Online (read-only) | v2 | Invoices, A/R, and P&L, so "income" can include invoiced-but-unpaid. Intuit developer app + OAuth |
 | Amazon order history | v2 | Splits "AMZN $214" into real items and categories |
 | Brokerage holdings CSV, crypto (Solana tax engine export) | v2 | Positions and cost basis |

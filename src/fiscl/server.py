@@ -698,10 +698,11 @@ def build_server(cfg: Config) -> MCPServer:
         # Destructive: a sync can delete or overwrite local rows (Plaid removed/modified), so clients should ask first.
         annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
         description=(
-            "Pull recent balances and transactions from the user's connected banks (SimpleFIN, Teller, Plaid; "
-            "read-only, it cannot move money) into the local database. provider = simplefin | teller | plaid | all "
+            "Pull recent balances and transactions from the user's connected banks (SimpleFIN, Plaid, Teller; "
+            "read-only, it cannot move money) into the local database. provider = simplefin | plaid | teller | all "
             "(default: every connected provider; unconnected ones are skipped). The user connects banks themselves "
-            "in a terminal with `fiscl connect`; this tool can't."
+            "in a terminal (`fiscl sync setup` for SimpleFIN, or `fiscl connect`); this tool can't. Importing "
+            "CSV/OFX/QFX files needs no connection."
         ),
     )
     def sync_accounts(provider: str = "all", days: int | None = None) -> dict[str, Any]:
@@ -720,7 +721,8 @@ def build_server(cfg: Config) -> MCPServer:
         annotations=READ_ONLY,
         description=(
             "Which banks are connected for sync: provider, institution, account names, last sync time, and status "
-            "(ok, needs_reauth, error). Never returns tokens or credentials."
+            "(ok, needs_reauth, error). Never returns tokens or credentials. Providers in order of preference: "
+            "file import (no connection), SimpleFIN, Plaid, Teller."
         ),
     )
     def list_connections() -> dict[str, Any]:
