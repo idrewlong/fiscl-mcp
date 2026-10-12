@@ -22,9 +22,10 @@ from ..installkey import (
 from ..normalize import load_aliases, normalize_merchant
 from .csv_import import CSVImportError, parse_csv
 from .ofx import OFXError, looks_like_ofx, parse_ofx
+from .qif import QIFError, looks_like_qif, parse_qif
 from .types import ParsedStatement
 
-SUPPORTED = {".csv", ".ofx", ".qfx", ".txt"}
+SUPPORTED = {".csv", ".ofx", ".qfx", ".qif", ".txt"}
 MAX_FILE_BYTES = 50 * 1024 * 1024
 # balances.source is CHECK-constrained; bank connectors all record as 'sync'.
 BALANCE_SOURCE = {"ofx": "ofx", "simplefin": "sync", "teller": "sync", "plaid": "sync"}
@@ -47,9 +48,17 @@ class ImportResult:
     edits_carried: int = 0  # pending rows whose splits/tags/note/category/scope moved to the posted row
     edits_dropped: int = 0  # pending rows whose split no longer matched the posted amount and was dropped
     error: str | None = None
+    # Counts of things skipped on purpose (QIF sections, split lines, holdings rows without a value).
+    warnings: dict[str, int] = field(default_factory=dict)
+    as_of: str | None = None  # holdings imports: the snapshot date
+    snapshots_replaced: int = 0  # holdings imports: snapshots this file replaced
 
     def as_dict(self) -> dict:
-        return self.__dict__.copy()
+        out = self.__dict__.copy()
+        for key in ("warnings", "as_of", "snapshots_replaced"):  # keep older formats' output unchanged
+            if not out[key]:
+                del out[key]
+        return out
 
 
 def sha256_file(path: Path) -> str:
@@ -65,18 +74,31 @@ def _dedupe_key(posted: str, amount: int, merchant: str, occurrence: int) -> str
     return "h:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def parse_file(path: Path, cfg: Config, profile: str | None = None) -> list[ParsedStatement]:
+def read_import_text(path: Path) -> str:
     if path.suffix.lower() not in SUPPORTED:
-        raise ImportFailed("unsupported file type (expected CSV, OFX, or QFX)")
+        raise ImportFailed("unsupported file type (expected CSV, OFX, QFX, or QIF)")
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ImportFailed("file is larger than 50 MB")
-    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    return path.read_text(encoding="utf-8-sig", errors="replace")
+
+
+def parse_text(
+    text: str, path: Path, cfg: Config, profile: str | None = None, qif_date: str | None = None
+) -> list[ParsedStatement]:
     try:
         if looks_like_ofx(text[:2000]):
             return parse_ofx(text)
+        if path.suffix.lower() == ".qif" or looks_like_qif(text):
+            return parse_qif(text, cfg, qif_date)
         return [parse_csv(text, cfg, profile)]
-    except (OFXError, CSVImportError) as exc:
+    except (OFXError, CSVImportError, QIFError) as exc:
         raise ImportFailed(str(exc)) from exc
+
+
+def parse_file(
+    path: Path, cfg: Config, profile: str | None = None, qif_date: str | None = None
+) -> list[ParsedStatement]:
+    return parse_text(read_import_text(path), path, cfg, profile, qif_date)
 
 
 def _free_name(conn: sqlite3.Connection, name: str) -> str:
@@ -130,7 +152,10 @@ def _resolve_account(
         )
         return find_account(conn, new_name)
     if not name:
-        raise ImportFailed("CSV files need an account: pass --account NAME or set `account` in the profile")
+        raise ImportFailed(
+            "this file needs an account: pass --account NAME, set `account` in the CSV profile, "
+            "or (QIF) name it in an !Account block"
+        )
     row = find_account(conn, name)
     if row is None:
         raise ImportFailed("the account name given doesn't exist. Create it with `fiscl accounts add`.")
@@ -278,7 +303,11 @@ def import_file(
     profile: str | None = None,
     dry_run: bool = False,
     post_process: bool = True,
+    qif_date: str | None = None,
+    as_of: str | None = None,
 ) -> ImportResult:
+    from . import holdings
+
     path = Path(path)
     result = ImportResult(filename=path.name, status="ok")
     digest = sha256_file(path)
@@ -286,10 +315,18 @@ def import_file(
     if prior and prior["status"] != "failed":
         result.status = "duplicate_file"
         return result
+    fmt = path.suffix.lstrip(".").lower()
     try:
-        statements = parse_file(path, cfg, profile)
-    except ImportFailed as exc:
-        return _record_failure(conn, path.name, path.suffix.lstrip(".").lower(), digest, result, str(exc), dry_run)
+        text = read_import_text(path)
+        holdings_profile = holdings.find_profile(text, cfg, profile)
+        if holdings_profile is None:
+            statements = parse_text(text, path, cfg, profile, qif_date)
+    except (ImportFailed, CSVImportError) as exc:
+        return _record_failure(conn, path.name, fmt, digest, result, str(exc), dry_run)
+    if holdings_profile is not None:
+        return holdings.import_holdings(
+            conn, cfg, text, holdings_profile, path.name, digest, result, account_name, as_of, dry_run
+        )
     return import_statements(conn, cfg, statements, path.name, digest, result, account_name, dry_run, post_process)
 
 
@@ -307,6 +344,10 @@ def import_statements(
     """Insert parsed statements from any source (file or bank sync) as one atomic import."""
     result = result or ImportResult(filename=label, status="ok")
     result.format = statements[0].format if statements else "none"
+    if account_name and len(statements) > 1 and result.format == "qif":
+        # --account would send every section to one account; the file already says which is which.
+        error = "this QIF file holds several accounts; import it without --account"
+        return _record_failure(conn, label, result.format, digest, result, error, dry_run)
     try:
         require_usable_key(
             conn, cfg, [s.account_key for s in statements if s.account_key]
@@ -335,6 +376,8 @@ def import_statements(
             result.pending_replaced += replaced
             result.edits_carried += carried
             result.edits_dropped += dropped
+            for key, count in stmt.warnings.items():
+                result.warnings[key] = result.warnings.get(key, 0) + count
         conn.execute(
             "UPDATE imports SET account_id = ?, rows_seen = ?, rows_added = ?, rows_skipped = ? WHERE id = ?",
             (account_id, result.rows_seen, result.rows_added, result.rows_skipped, import_id),

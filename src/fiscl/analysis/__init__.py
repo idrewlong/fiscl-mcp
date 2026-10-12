@@ -8,6 +8,7 @@ from ..common import MAX_BULK_ROWS, data_freshness, meta, resolve_target
 from .budgets import budget_status, set_budget, suggest_budgets
 from .edits import add_note, apply_categories, dismiss_recurring, split_transaction, tag_transactions
 from .forecast import LIQUID_TYPES, forecast_cash
+from .holdings import holdings
 from .monitoring import find_anomalies, refund_tracker, subscription_watchdog
 from .planning import afford, debt_payoff, goal_progress, manage_asset, manage_goal, net_worth
 from .recurring_report import list_recurring
@@ -29,6 +30,7 @@ __all__ = [
     "find_anomalies",
     "forecast_cash",
     "goal_progress",
+    "holdings",
     "import_status",
     "list_accounts",
     "list_recurring",

@@ -181,7 +181,7 @@ _AUDIT_SAFE_KEYS = {
 # (mis)passed in one of these slots is logged as "<invalid>", never as written.
 _AUDIT_ENUMS: dict[str, frozenset[str]] = {
     "provider": frozenset({"all", "simplefin", "teller", "plaid"}),
-    "group_by": frozenset({"category", "merchant", "account", "month"}),
+    "group_by": frozenset({"category", "merchant", "account", "month", "position", "asset_class"}),
     "compare_to": frozenset({"previous_period", "same_period_last_year", "none"}),
     "interval": frozenset({"month", "week"}),
     "sort": frozenset({"date_desc", "date_asc", "amount_asc", "amount_desc"}),

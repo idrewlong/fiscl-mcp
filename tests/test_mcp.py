@@ -55,6 +55,7 @@ async def test_tools_listed_with_annotations(demo):
         "category_trend",
         "record_1099",
         "reconcile_1099",
+        "holdings",
     }
     assert expected <= set(tools)
     assert tools["spending_summary"].annotations.read_only_hint is True
@@ -70,6 +71,7 @@ async def test_tools_listed_with_annotations(demo):
         "merchant_history",
         "category_trend",
         "reconcile_1099",
+        "holdings",
     ):
         assert tools[name].annotations.read_only_hint is True, name
     destructive_tools = (
@@ -106,6 +108,7 @@ async def test_every_read_tool_returns_meta_and_display_amounts(demo):
             ("list_accounts", {}),
             ("schedule_c_draft", {"year": 2026}),
             ("net_worth", {}),
+            ("holdings", {}),
             ("afford", {"amount": 2000}),
             ("debt_payoff", {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]}),
             ("goal_progress", {}),

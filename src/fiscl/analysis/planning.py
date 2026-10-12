@@ -16,6 +16,7 @@ from ..guard import GuardError, choice, clean_text, parse_date
 from ..money import amount, pct
 from ..recurring import add_months
 from .forecast import forecast_cash, rolled_balance
+from .holdings import snapshot_value
 
 ASSET_KINDS = ("property", "vehicle", "equipment", "investment", "cash", "liability", "other")
 DEBT_TYPES = ("credit", "loan")
@@ -178,17 +179,28 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
     liabilities: list[dict] = []
     stale, missing = [], []
     balances: dict[int, int] = {}
+    from_holdings: list[dict] = []
+    unvalued_positions = 0
     for a in accounts:
         rolled = rolled_balance(conn, a["id"], on)
-        if rolled is None:
+        held = snapshot_value(conn, a["id"], on)
+        if held is not None and (rolled is None or held[0] >= rolled[1]):
+            # A positions import at least as new as the latest balance values the account. One source, never both.
+            last, minor, unvalued = held
+            unvalued_positions += unvalued
+            from_holdings.append({"account": a["name"], "as_of": last})
+            source = "holdings"
+        elif rolled is None:
             missing.append(a["name"])
             continue
-        minor, snapshot = rolled
-        balances[a["id"]] = minor
-        last = _last_data_day(conn, a["id"], snapshot, on)
+        else:
+            minor, snapshot = rolled
+            balances[a["id"]] = minor
+            last = _last_data_day(conn, a["id"], snapshot, on)
+            source = "account"
         if (on - date.fromisoformat(last)).days > STALE_DAYS:
             stale.append({"account": a["name"], "data_through": last})
-        row = {"name": a["name"], "type": a["type"], "source": "account", "as_of": last}
+        row = {"name": a["name"], "type": a["type"], "source": source, "as_of": last}
         # Signed as the bank reports it: a negative card or loan balance is money owed.
         if minor >= 0:
             assets.append({**row, "amount": amount(minor, cfg.currency)})
@@ -243,6 +255,14 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
     ]
     if on != today:
         assumptions.append("Manual assets use their current values, not their value on the chosen date.")
+    if from_holdings:
+        assumptions.append(
+            "Accounts marked source 'holdings' are valued from your latest holdings import (market value of the "
+            "positions, as of the import date) instead of a balance; fiscl never adds both. Their history isn't "
+            "in change_vs."
+        )
+    if unvalued_positions:
+        assumptions.append("Some holdings positions have no price or value in the import and are left out.")
     if missing:
         assumptions.append(
             "Some accounts have no balance on file and are left out of the totals (see missing_balances)."
@@ -251,7 +271,7 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
         assumptions.append(
             f"Some balances are more than {STALE_DAYS} days old (see stale_balances). Import fresh data."
         )
-    return {
+    result = {
         "as_of": on.isoformat(),
         "assets": assets,
         "liabilities": liabilities,
@@ -264,6 +284,9 @@ def net_worth(conn, cfg: Config, as_of=None, today=None) -> dict:
         "stale_balances": stale,
         "meta": meta(conn, cfg, row_count=len(assets) + len(liabilities)),
     }
+    if from_holdings:  # absent otherwise, so output without holdings is unchanged
+        result["valued_from_holdings"] = from_holdings
+    return result
 
 
 # --- afford --------------------------------------------------------------------------------

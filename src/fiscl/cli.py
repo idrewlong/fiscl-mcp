@@ -118,7 +118,14 @@ def cmd_import(cfg, args) -> int:
     with open_db(cfg) as conn:
         for f in args.files:
             result = import_file(
-                conn, cfg, Path(f), account_name=args.account, profile=args.profile, dry_run=args.dry_run
+                conn,
+                cfg,
+                Path(f),
+                account_name=args.account,
+                profile=args.profile,
+                dry_run=args.dry_run,
+                qif_date=args.qif_date,
+                as_of=args.as_of,
             )
             r = result.as_dict()
             if args.dry_run:
@@ -154,7 +161,19 @@ def cmd_accounts(cfg, args) -> int:
             if find_account(conn, args.name):
                 print(f"account {args.name!r} already exists", file=sys.stderr)
                 return 1
-            add_account(conn, args.name, args.type, args.institution, args.currency or cfg.currency, scope=args.scope)
+            last4 = (args.last4 or "").strip() or None
+            if last4 and not (len(last4) == 4 and last4.isalnum() and last4.isascii()):
+                print("--last4 must be exactly 4 letters or digits", file=sys.stderr)
+                return 1
+            add_account(
+                conn,
+                args.name,
+                args.type,
+                args.institution,
+                args.currency or cfg.currency,
+                last4=last4,
+                scope=args.scope,
+            )
             print(f"added {args.name} ({args.scope})")
         elif args.action == "scope":
             cur = conn.execute("UPDATE accounts SET scope = ? WHERE name = ? COLLATE NOCASE", (args.scope, args.name))
@@ -171,8 +190,9 @@ def cmd_accounts(cfg, args) -> int:
 def cmd_profile(cfg, args) -> int:
     from .importers.csv_import import init_profile
 
-    out = init_profile(Path(args.file), cfg, args.name)
-    print(f"wrote {out}\nReview it, then: fiscl import {args.file} --account NAME")
+    out = init_profile(Path(args.file), cfg, args.name, kind=args.kind)
+    extra = " --as-of YYYY-MM-DD" if args.kind == "holdings" else ""
+    print(f"wrote {out}\nReview it, then: fiscl import {args.file} --account NAME{extra}")
     return 0
 
 
@@ -498,10 +518,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-watch", action="store_true", help="don't watch the inbox folder")
     s.set_defaults(fn=cmd_serve)
 
-    s = sub.add_parser("import", help="import CSV/OFX/QFX files")
+    s = sub.add_parser("import", help="import CSV/OFX/QFX/QIF files and holdings snapshots")
     s.add_argument("files", nargs="+")
     s.add_argument("--account", help="account name (required for CSV unless the profile sets one)")
     s.add_argument("--profile", help="force a CSV profile by name")
+    s.add_argument("--qif-date", choices=["mdy", "dmy"], help="read ambiguous QIF dates month-first or day-first")
+    s.add_argument("--as-of", help="holdings files: the snapshot date (YYYY-MM-DD) when the file doesn't carry one")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_import)
 
@@ -520,6 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     x.add_argument("--institution")
     x.add_argument("--currency")
+    x.add_argument("--last4", help="last 4 digits of the account number (holdings files can route rows by it)")
     x.add_argument("--scope", default="personal", choices=["personal", "business", "mixed"])
     x = a.add_parser("scope", help="set an account to personal, business, or mixed")
     x.add_argument("name")
@@ -536,6 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
     x = a.add_parser("init", help="generate a profile from a CSV header")
     x.add_argument("file")
     x.add_argument("--name")
+    x.add_argument("--kind", choices=["transactions", "holdings"], default="transactions")
     s.set_defaults(fn=cmd_profile)
 
     s = sub.add_parser("rules", help="categorization rules")

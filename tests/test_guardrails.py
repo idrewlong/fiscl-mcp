@@ -60,6 +60,7 @@ NO_NETWORK_TOOL_ARGS: dict[str, dict] = {
     "suggest_budgets": {},
     "forecast_cash": {},
     "net_worth": {},
+    "holdings": {},
     "afford": {"amount": 2000},
     "debt_payoff": {"debts": [{"name": "Card", "balance": 1000, "apr": 12, "min_payment": 100}]},
     "goal_progress": {},

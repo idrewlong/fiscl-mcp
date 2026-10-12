@@ -66,3 +66,8 @@ Newest first. Each entry: date, decision, why, alternatives rejected, where it l
 - Archiving a business is refused while it has current-year activity or 1099 forms.
 - The `tax_checkup` prompt falls back to the current year on an invalid `year` (fixed sentence, no echo) rather than erroring.
 - The forbidden-endpoint source scan has one exemption mechanism, an exact-string allowlist per file with a reason (`tests/conftest.py::ALLOWED_REFERENCE_URLS`). The AST scan also folds literal concatenation.
+
+## 2026-10-12 — QIF and holdings import rules (Phase 4)
+- QIF imports never create accounts from file text; `!Account` names must match an existing account. Dotted `DD.MM.YYYY` dates are always day-first; slash dates default to month-first (`--qif-date` or `[import] qif_date_order` overrides). A file that looks like the other order fails without echoing values.
+- Holdings: quantities and prices are Decimal strings; values are minor units. Negative quantities (shorts) are allowed. Cost basis is summed only when every lot has one. Holdings accounts stay home-currency until FX lands. Broker account-number columns are ignored or cut to last 4 for routing, never stored.
+- Built-in Fidelity/Schwab/Vanguard/crypto profiles wait for the owner's scrubbed header samples.

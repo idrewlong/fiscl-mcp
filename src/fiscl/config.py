@@ -84,6 +84,7 @@ class Config:
     debts: dict[str, DebtTerms] = field(default_factory=dict)
     teller_environment: str = "development"  # [connectors.teller] environment
     plaid_environment: str = "sandbox"  # [connectors.plaid] environment
+    qif_date_order: str = "mdy"  # [import] qif_date_order: how to read ambiguous QIF dates (mdy | dmy)
 
     @property
     def db_path(self) -> Path:
@@ -146,6 +147,11 @@ max_rows_hard = 500
 # P2P counterparty names) are still returned.
 redact_descriptions = false
 audit_log = true
+
+[import]
+# How to read ambiguous QIF dates such as 01/02/2026: "mdy" (US, default) or "dmy". Override per file with
+# `fiscl import file.qif --qif-date dmy`.
+qif_date_order = "mdy"
 
 [transfers]
 window_days = 3
@@ -393,8 +399,12 @@ def load_config(home: Path | None = None) -> Config:
     plaid_env = (raw.get("connectors", {}).get("plaid", {}) or {}).get("environment", "sandbox")
     if plaid_env not in PLAID_ENVIRONMENTS:
         raise ConfigError(f"connectors.plaid.environment must be one of {', '.join(PLAID_ENVIRONMENTS)}")
+    qif_date_order = (raw.get("import", {}) or {}).get("qif_date_order", "mdy")
+    if qif_date_order not in ("mdy", "dmy"):
+        raise ConfigError("import.qif_date_order must be mdy or dmy")
     return Config(
         home=home,
+        qif_date_order=qif_date_order,
         tax=tax,
         teller_environment=teller_env,
         plaid_environment=plaid_env,

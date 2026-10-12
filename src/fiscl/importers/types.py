@@ -28,4 +28,7 @@ class ParsedStatement:
     currency: str = "USD"
     balances: list[tuple[str, int]] = field(default_factory=list)
     profile: str | None = None
-    account_name: str | None = None  # from a CSV profile's `account` field
+    account_name: str | None = None  # from a CSV profile's `account` field, or a QIF `!Account` block
+    # Counts of things the parser skipped on purpose (QIF sections, option lines, split lines). File-level counts ride
+    # on the first statement only, so summing across statements never double counts.
+    warnings: dict[str, int] = field(default_factory=dict)

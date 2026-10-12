@@ -38,6 +38,10 @@ fiscl itself has no telemetry, no analytics, no accounts, and no servers.
 
 `export_schedule_c` writes files only under `~/fiscl/exports/` (folder 0700, files 0600, symlinks refused, no caller-chosen paths). Exports are as sensitive as the database: send them to your preparer over a secure channel and delete them when you're done. `fiscl doctor` checks the folder's permissions. Exports are scrubbed like tool responses: card numbers (Luhn-checked), SSNs, and long account-like numbers in text cells are masked in CSV and Markdown (so 9+ digit invoice numbers in notes are masked too); amounts are untouched. Files are published with a hard link so a name that appears at the last moment is never overwritten.
 
+## Holdings
+
+Positions files are parsed locally. There are no price or FX lookups; prices come only from your imports. Full account numbers in broker files are never stored: the column is ignored by default, or cut to the last 4 digits only to choose the matching fiscl account.
+
 ## Tax records you enter
 
 1099 forms you record (`record_1099`) are stored only in the local database. Nothing is fetched. Payer names and amounts never appear in error messages or the audit log.

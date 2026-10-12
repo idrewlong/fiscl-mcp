@@ -119,6 +119,9 @@ async def run(home: Path) -> Smoke:
             ("suggest_budgets", {}),
             ("forecast_cash", {"days": 30}),
             ("net_worth", {}),
+            # no holdings in the demo: empty states, never a network call
+            ("holdings", {}),
+            ("holdings", {"group_by": "asset_class", "limit": 5}),
             ("afford", {"amount": 500}),
             ("afford", {"amount": 25, "recurring_monthly": True, "buffer": 100}),
             ("debt_payoff", {"extra_monthly": 50, "debts": debts}),
@@ -188,6 +191,8 @@ async def run(home: Path) -> Smoke:
             ("refund_tracker", {"days": 0}),
             ("merchant_history", {"merchant": "Nobody Inc"}),
             ("category_trend", {"category": "No such category"}),
+            ("holdings", {"group_by": "zodiac"}),
+            ("holdings", {"account": "No such account"}),
             ("show_chart", {"kind": "pie"}),
             ("show_chart", {"kind": "category_trend"}),
             ("split_transaction", {"transaction_id": tid, "parts": [{"amount": "-1.00", "category": "A"}] * 2}),

@@ -282,6 +282,34 @@ MIGRATIONS: list[str] = [
            COALESCE(s.business_id, t.business_id)
       FROM splits s JOIN transactions t ON t.id = s.transaction_id;
     """,
+    # 9 — v2 phase 4: holdings snapshots from imported positions files. Quantity and price are Decimal strings (crypto
+    # needs up to 18 places); value and cost basis are minor units. One snapshot per account and date; re-importing
+    # replaces it. No account numbers are stored: the file's account column is dropped or reduced to its last 4.
+    # Down: DROP TABLE holdings; DROP TABLE holdings_snapshots;
+    """
+    CREATE TABLE holdings_snapshots (
+        id         INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        as_of      TEXT NOT NULL,
+        import_id  INTEGER REFERENCES imports(id),
+        created_at TEXT NOT NULL,
+        UNIQUE (account_id, as_of)
+    );
+    CREATE TABLE holdings (
+        id           INTEGER PRIMARY KEY,
+        snapshot_id  INTEGER NOT NULL REFERENCES holdings_snapshots(id) ON DELETE CASCADE,
+        symbol       TEXT NOT NULL,
+        name         TEXT,
+        asset_class  TEXT NOT NULL DEFAULT 'other'
+                       CHECK (asset_class IN ('equity','fund','bond','cash','crypto','option','other')),
+        quantity     TEXT NOT NULL,
+        price        TEXT,
+        market_value INTEGER,
+        cost_basis   INTEGER,
+        currency     TEXT NOT NULL
+    );
+    CREATE INDEX ix_holdings_snapshot ON holdings(snapshot_id);
+    """,
 ]
 
 DEFAULT_BUSINESS_ID = 1
